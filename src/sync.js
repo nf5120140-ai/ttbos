@@ -4,7 +4,7 @@
 // עובד גם כשאין אינטרנט: הכל נשמר מקומית ונשלח כשהרשת חוזרת.
 // ============================================================
 import { createClient } from '@supabase/supabase-js'
-import { outboxRows, markPushed, applyRemote, getMeta, setMeta, outboxSize, setOnLocalChange, ensureDefaultManager } from './db.js'
+import { DEMO, outboxRows, markPushed, applyRemote, getMeta, setMeta, outboxSize, setOnLocalChange, ensureDefaultManager } from './db.js'
 
 function readCfg() {
   let url = import.meta.env.VITE_SUPABASE_URL || ''
@@ -17,7 +17,7 @@ function readCfg() {
 }
 
 const cfg = readCfg()
-export const sb = cfg.url && cfg.key ? createClient(cfg.url, cfg.key, { auth: { persistSession: true, autoRefreshToken: true } }) : null
+export const sb = !DEMO && cfg.url && cfg.key ? createClient(cfg.url, cfg.key, { auth: { persistSession: true, autoRefreshToken: true } }) : null
 export const cloudConfigured = !!sb
 
 export function setCloudConfig(url, key) {

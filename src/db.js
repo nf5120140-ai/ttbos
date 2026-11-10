@@ -7,7 +7,15 @@
 
 export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order']
 
-const DB_NAME = 'tatbus'
+// מצב הדגמה: ttbos.vercel.app/?demo — נתוני דוגמה, בלי שרת, במסד נפרד שלא נוגע בנתונים האמיתיים
+export const DEMO = (() => {
+  try {
+    return new URLSearchParams(location.search).has('demo')
+  } catch {
+    return false
+  }
+})()
+const DB_NAME = DEMO ? 'tatbus-demo' : 'tatbus'
 let idb = null
 const memFallback = { records: new Map(), outbox: new Map(), meta: new Map() }
 

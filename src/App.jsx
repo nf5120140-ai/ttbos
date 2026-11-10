@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { initDb, list, get, save, saveMany, hashPin, ensureDefaultManager, deviceName, setDeviceName, wipeLocal, KINDS } from './db.js'
+import { DEMO, initDb, list, get, save, saveMany, hashPin, ensureDefaultManager, deviceName, setDeviceName, wipeLocal, KINDS } from './db.js'
 import { startSync, syncNow, cloudConfigured, cloudLogin, cloudLogout, setCloudConfig } from './sync.js'
 import { seedDemo } from './seed.js'
 import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime } from './ui.jsx'
@@ -19,7 +19,7 @@ export default function App() {
       await initDb()
       if (!cloudConfigured) ensureDefaultManager()
       // גרסת הדגמה בלבד: טוען נתוני דוגמה אוטומטית
-      if (import.meta.env.VITE_DEMO && list('product').length === 0) seedDemo()
+      if ((DEMO || import.meta.env.VITE_DEMO) && list('product').length === 0) seedDemo()
       await startSync()
       setReady(true)
     })()
@@ -107,6 +107,7 @@ export default function App() {
 }
 
 function SyncBadge({ s }) {
+  if (DEMO) return <span className="sync local" title="מצב הדגמה — לא מחובר לשרת">● הדגמה</span>
   if (s.mode === 'local') return <span className="sync local" title="עובד מקומית בלבד — לא מוגדר שרת">● מקומי</span>
   if (!s.online) return <span className="sync off" title="אין אינטרנט — הכל נשמר ויסונכרן אחר כך">● לא מקוון{s.pending ? ` (${s.pending})` : ''}</span>
   if (s.error) return <button className="sync err" title={s.error} onClick={syncNow}>● שגיאת סנכרון</button>
@@ -156,6 +157,13 @@ function SellerLogin({ onLogin }) {
         <div className="login-logo">ת</div>
         <h1>תתבוס</h1>
         <p className="muted">{deviceName()}</p>
+        {DEMO && (
+          <div className="demo-note">
+            🧪 <b>מצב הדגמה</b> — נתוני דוגמה בלבד, נשמרים רק במכשיר הזה.
+            <br />
+            מנהל: קוד <b>1234</b> · מוכר יוסי: קוד <b>1111</b>
+          </div>
+        )}
         {!sel ? (
           <>
             <h3>מי מוכר עכשיו?</h3>
@@ -189,7 +197,7 @@ function SellerLogin({ onLogin }) {
                 </button>
               ))}
             </div>
-            {onlyDefault && <p className="muted small">קוד ראשוני: 1234 — שנה אותו בהגדרות</p>}
+            {onlyDefault && !DEMO && <p className="muted small">קוד ראשוני: 1234 — שנה אותו בהגדרות</p>}
           </>
         )}
       </div>
