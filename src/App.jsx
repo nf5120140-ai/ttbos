@@ -1,13 +1,27 @@
 import { useEffect, useState } from 'react'
-import { DEMO, initDb, list, get, save, saveMany, hashPin, ensureDefaultManager, deviceName, setDeviceName, wipeLocal, KINDS } from './db.js'
-import { startSync, syncNow, cloudConfigured, cloudLogin, cloudLogout, setCloudConfig } from './sync.js'
+import { DEMO, initDb, list, getSetting, setSetting, get, save, saveMany, hashPin, ensureDefaultManager, deviceName, setDeviceName, wipeLocal, KINDS } from './db.js'
+import { startSync, syncNow, cloudConfigured, cloudLogin, cloudSignup, cloudResetPassword, cloudSetPassword, cloudLogout, setCloudConfig, nedarimFnUrl } from './sync.js'
+import { ParentTopup } from './Credit.jsx'
 import { seedDemo } from './seed.js'
 import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime } from './ui.jsx'
 import Pos from './Pos.jsx'
 import { Customers, Inventory, Orders } from './Manage.jsx'
 import { Reports, CashCount } from './Reports.jsx'
 
+const TOPUP_ID = (() => {
+  try {
+    return new URLSearchParams(location.search).get('topup')
+  } catch {
+    return null
+  }
+})()
+
 export default function App() {
+  if (TOPUP_ID) return <ParentTopup customerId={TOPUP_ID} />
+  return <KioskApp />
+}
+
+function KioskApp() {
   const [ready, setReady] = useState(false)
   const [user, setUser] = useState(null)
   const [tab, setTab] = useState('pos')
@@ -44,7 +58,9 @@ export default function App() {
   if (!ready) return <div className="splash">תתבוס…</div>
 
   // ענן מוגדר אבל המכשיר לא מחובר — חיבור חד-פעמי למכשיר
-  if (cloudConfigured && !sync.authed) return <CloudGate />
+  if (cloudConfigured && sync.recovery) return <SetNewPassword />
+  if (cloudConfigured && (!sync.authed || sync.member === false)) return <CloudGate notMember={sync.authed && sync.member === false} email={sync.email} />
+  if (cloudConfigured && sync.member === null) return <div className="splash">מתחבר…</div>
   if (cloudConfigured && !sync.pulledOnce && list('user').length === 0) return (
       <div className="splash">
         טוען נתונים מהשרת…
@@ -205,34 +221,168 @@ function SellerLogin({ onLogin }) {
   )
 }
 
-// ---------- חיבור מכשיר לשרת ----------
-function CloudGate() {
-  const [email, setEmail] = useState('')
+// ---------- כניסה למערכת (פעם אחת לכל מכשיר) ----------
+function CloudGate({ notMember, email: currentEmail }) {
+  const [mode, setMode] = useState(() => (localStorage.getItem('tt_email') ? 'login' : 'choose')) // choose | login | signup | forgot
+  const [email, setEmail] = useState(() => localStorage.getItem('tt_email') || '')
   const [pw, setPw] = useState('')
+  const [pw2, setPw2] = useState('')
+  const [show, setShow] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  async function go(e) {
-    e.preventDefault()
-    setBusy(true)
+  const [info, setInfo] = useState('')
+
+  const go = (m) => {
+    setMode(m)
     setErr('')
+    setInfo('')
+  }
+  const remember = () => {
     try {
-      await cloudLogin(email.trim(), pw)
+      localStorage.setItem('tt_email', email.trim())
+    } catch {}
+  }
+
+  async function submit(e) {
+    e.preventDefault()
+    setErr('')
+    setInfo('')
+    const em = email.trim().toLowerCase()
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return setErr('כתובת מייל לא תקינה')
+    if (!navigator.onLine) return setErr('צריך אינטרנט בכניסה הראשונה של המכשיר')
+    setBusy(true)
+    try {
+      if (mode === 'login') {
+        remember()
+        const ok = await cloudLogin(em, pw)
+        if (!ok) setErr('המייל הזה לא מחובר למזנון. היכנס עם המייל שנרשם בפעם הראשונה.')
+      } else if (mode === 'signup') {
+        if (pw.length < 6) throw new Error('סיסמה של 6 תווים לפחות')
+        if (pw !== pw2) throw new Error('הסיסמאות לא זהות')
+        remember()
+        const r = await cloudSignup(em, pw)
+        if (r === 'exists') {
+          setMode('login')
+          setPw('')
+          setPw2('')
+          setInfo('המייל הזה כבר רשום — הכנס את הסיסמה שלו')
+        } else if (r === 'confirm') {
+          setMode('login')
+          setInfo('נשלח מייל אישור. לחץ על הקישור במייל ואז התחבר כאן.')
+        }
+      } else if (mode === 'forgot') {
+        await cloudResetPassword(em)
+        setInfo('נשלח מייל עם קישור לבחירת סיסמה חדשה. פתח אותו במכשיר הזה.')
+      }
     } catch (x) {
-      setErr(navigator.onLine ? 'פרטים שגויים: ' + x.message : 'צריך אינטרנט לחיבור הראשון של המכשיר')
+      setErr(x.message || String(x))
     }
     setBusy(false)
   }
+
   return (
     <div className="login">
-      <form className="login-box" onSubmit={go}>
+      <form className="login-box" onSubmit={submit}>
         <div className="login-logo">ת</div>
-        <h1>חיבור מכשיר</h1>
-        <p className="muted">פעם אחת לכל מכשיר — עם חשבון המזנון. אחרי זה הקופה עובדת גם בלי אינטרנט.</p>
-        <input placeholder="אימייל של המזנון" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" />
-        <input placeholder="סיסמה" value={pw} onChange={(e) => setPw(e.target.value)} type="password" autoComplete="current-password" />
+        <h1>תתבוס</h1>
+        {notMember && (
+          <div className="err">
+            המייל {currentEmail} לא מחובר למזנון.
+            <button type="button" className="btn small" onClick={() => cloudLogout()}>
+              התנתק
+            </button>
+          </div>
+        )}
+
+        {mode === 'choose' && (
+          <>
+            <p className="muted">כל המכשירים של המזנון נכנסים עם אותו מייל וסיסמה. עושים את זה פעם אחת בכל מכשיר.</p>
+            <button type="button" className="btn primary big" onClick={() => go('login')}>
+              יש לי כבר חשבון — כניסה
+            </button>
+            <button type="button" className="btn big" onClick={() => go('signup')}>
+              פעם ראשונה — רישום המזנון
+            </button>
+          </>
+        )}
+
+        {mode !== 'choose' && (
+          <>
+            <h3>{mode === 'login' ? 'כניסה' : mode === 'signup' ? 'רישום המזנון (פעם ראשונה בלבד)' : 'שכחתי סיסמה'}</h3>
+            {mode === 'signup' && <p className="muted small">בוחרים מייל וסיסמה. אחר כך בכל מכשיר נוסף נכנסים עם אותם פרטים.</p>}
+            <input placeholder="מייל" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" dir="ltr" />
+            {mode !== 'forgot' && (
+              <div className="pw-wrap">
+                <input
+                  placeholder="סיסמה"
+                  value={pw}
+                  onChange={(e) => setPw(e.target.value)}
+                  type={show ? 'text' : 'password'}
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  dir="ltr"
+                />
+                <button type="button" className="icon-btn" onClick={() => setShow(!show)} title="הצג סיסמה">
+                  {show ? '🙈' : '👁'}
+                </button>
+              </div>
+            )}
+            {mode === 'signup' && <input placeholder="סיסמה שוב" value={pw2} onChange={(e) => setPw2(e.target.value)} type={show ? 'text' : 'password'} autoComplete="new-password" dir="ltr" />}
+            {err && <div className="err">{err}</div>}
+            {info && <div className="info">{info}</div>}
+            <button className="btn primary big" disabled={busy}>
+              {busy ? 'רגע…' : mode === 'login' ? 'כניסה' : mode === 'signup' ? 'הרשמה וכניסה' : 'שלח לי קישור'}
+            </button>
+            <div className="row space small">
+              {mode !== 'login' && (
+                <button type="button" className="link" onClick={() => go('login')}>
+                  יש לי חשבון — כניסה
+                </button>
+              )}
+              {mode !== 'signup' && (
+                <button type="button" className="link" onClick={() => go('signup')}>
+                  פעם ראשונה? רישום
+                </button>
+              )}
+              {mode === 'login' && (
+                <button type="button" className="link" onClick={() => go('forgot')}>
+                  שכחתי סיסמה
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </form>
+    </div>
+  )
+}
+
+function SetNewPassword() {
+  const [pw, setPw] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="login">
+      <form
+        className="login-box"
+        onSubmit={async (e) => {
+          e.preventDefault()
+          if (pw.length < 6) return setErr('סיסמה של 6 תווים לפחות')
+          setBusy(true)
+          try {
+            await cloudSetPassword(pw)
+            toast('הסיסמה עודכנה')
+          } catch (x) {
+            setErr(x.message)
+          }
+          setBusy(false)
+        }}
+      >
+        <div className="login-logo">ת</div>
+        <h1>סיסמה חדשה</h1>
+        <input placeholder="סיסמה חדשה" type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" dir="ltr" />
         {err && <div className="err">{err}</div>}
         <button className="btn primary big" disabled={busy}>
-          {busy ? 'מתחבר…' : 'התחבר'}
+          שמור
         </button>
       </form>
     </div>
@@ -321,6 +471,10 @@ function Settings({ user, sync }) {
           ) : (
             <>
               <div className="sum-row">
+                <span>מחובר כ</span>
+                <b dir="ltr">{sync.email}</b>
+              </div>
+              <div className="sum-row">
                 <span>חיבור</span>
                 <b>{sync.online ? 'מקוון' : 'לא מקוון'}</b>
               </div>
@@ -337,6 +491,23 @@ function Settings({ user, sync }) {
                 <button className="btn primary grow" onClick={syncNow}>
                   🔄 סנכרן עכשיו
                 </button>
+                {isMgr && (
+                  <button
+                    className="btn"
+                    onClick={async () => {
+                      const p = prompt('סיסמה חדשה לחשבון המזנון (לפחות 6 תווים). שים לב — המכשירים האחרים יישארו מחוברים.')
+                      if (!p) return
+                      try {
+                        await cloudSetPassword(p)
+                        toast('הסיסמה עודכנה')
+                      } catch (x) {
+                        toast(x.message, 'err')
+                      }
+                    }}
+                  >
+                    החלף סיסמה
+                  </button>
+                )}
                 {isMgr && (
                   <button
                     className="btn"
@@ -368,11 +539,15 @@ function Settings({ user, sync }) {
         </div>
       </div>
 
+      {isMgr && <GeneralSettings />}
+
+      {isMgr && <NedarimSettings mode={sync.mode} />}
+
       {isMgr && (
         <div className="card">
           <div className="row space">
             <h3>מוכרים ומשתמשים</h3>
-            <button className="btn primary" onClick={() => setEdit({ role: 'seller', active: true, perms: { void: true, topup: true, discount: true, reports: false } })}>
+            <button className="btn primary" onClick={() => setEdit({ role: 'seller', active: true, perms: { void: true, topup: true, discount: true, terminal: true, reports: false } })}>
               + מוכר
             </button>
           </div>
@@ -385,6 +560,7 @@ function Settings({ user, sync }) {
                   <th>ביטול/מחיקה</th>
                   <th>טעינת ארנק</th>
                   <th>הנחות</th>
+                  <th>מסופון</th>
                   <th>דוחות</th>
                   <th>פעיל</th>
                   <th></th>
@@ -397,8 +573,8 @@ function Settings({ user, sync }) {
                       <b>{u.name}</b>
                     </td>
                     <td>{u.role === 'manager' ? 'מנהל' : 'מוכר'}</td>
-                    {['void', 'topup', 'discount', 'reports'].map((p) => (
-                      <td key={p}>{u.role === 'manager' || u.perms?.[p] ? '✓' : '—'}</td>
+                    {['void', 'topup', 'discount', 'terminal', 'reports'].map((p) => (
+                      <td key={p}>{can(u, p) ? '✓' : '—'}</td>
                     ))}
                     <td>{u.active !== false ? '✓' : '—'}</td>
                     <td>
@@ -498,6 +674,7 @@ function UserEditor({ u, me, onClose }) {
           <Toggle checked={f.perms.void} onChange={setPerm('void')} label="מותר לבטל / למחוק מכירות" />
           <Toggle checked={f.perms.topup} onChange={setPerm('topup')} label="מותר לטעון ארנקים" />
           <Toggle checked={f.perms.discount} onChange={setPerm('discount')} label="מותר לתת הנחות" />
+          <Toggle checked={f.perms.terminal !== false} onChange={setPerm('terminal')} label="מותר לרשום אשראי במסופון" />
           <Toggle checked={f.perms.reports} onChange={setPerm('reports')} label="רואה דוחות" />
         </>
       )}
@@ -506,5 +683,94 @@ function UserEditor({ u, me, onClose }) {
         שמור
       </button>
     </Modal>
+  )
+}
+
+function NedarimSettings({ mode }) {
+  const cur = getSetting('nedarim')
+  const [f, setF] = useState({ enabled: true, parentLinks: true, minTopup: 50, title: 'מזנון הישיבה', ...cur })
+  const set = (k) => (e) => setF({ ...f, [k]: e?.target ? e.target.value : e })
+  function saveIt() {
+    const mosad = String(f.mosad || '').replace(/\D/g, '')
+    if (mosad && mosad.length !== 7) return toast('מספר מוסד צריך להיות 7 ספרות', 'err')
+    if (f.apiValid && /^npk_/i.test(f.apiValid)) return toast('זה המפתח הסודי (ApiPassword)! צריך את "טקסט האימות" ApiValid', 'err')
+    setSetting('nedarim', { ...f, mosad, apiValid: String(f.apiValid || '').trim(), minTopup: Number(f.minTopup) || 0 })
+    toast('נשמר')
+  }
+  return (
+    <div className="card">
+      <h3>💳 תשלום באשראי — נדרים פלוס</h3>
+      {mode === 'local' || DEMO ? (
+        <p className="muted">זמין רק כשהמערכת מחוברת לשרת.</p>
+      ) : (
+        <>
+          <p className="muted small">
+            בנדרים פלוס: עוד ← מפתחות API. מעתיקים את <b>מספר המוסד</b> ואת <b>טקסט האימות (ApiValid)</b>.{' '}
+            <b>לא</b> את מפתח ה-ApiPassword (npk_…).
+          </p>
+          <div className="form-grid">
+            <Field label="מספר מוסד">
+              <input dir="ltr" inputMode="numeric" value={f.mosad || ''} onChange={set('mosad')} />
+            </Field>
+            <Field label="טקסט אימות (ApiValid)">
+              <input dir="ltr" value={f.apiValid || ''} onChange={set('apiValid')} />
+            </Field>
+            <Field label="סכום מינימלי לטעינה בקישור ₪">
+              <input type="number" value={f.minTopup} onChange={set('minTopup')} />
+            </Field>
+            <Field label="שם שיופיע בדף ההורים">
+              <input value={f.title || ''} onChange={set('title')} />
+            </Field>
+          </div>
+          <Toggle checked={f.enabled !== false} onChange={set('enabled')} label="אשראי פעיל בקופה" />
+          <Toggle checked={f.parentLinks !== false} onChange={set('parentLinks')} label="אפשר קישורי טעינה להורים" />
+          <details>
+            <summary className="muted small">כתובת לאישורי תשלום (לידיעה)</summary>
+            <code className="small" dir="ltr" style={{ wordBreak: 'break-all' }}>
+              {nedarimFnUrl}?cb=1
+            </code>
+            <p className="muted small">הכתובת נשלחת אוטומטית עם כל עסקה — אין צורך להגדיר אותה בנדרים.</p>
+          </details>
+          <button className="btn primary" onClick={saveIt}>
+            שמור
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
+function GeneralSettings() {
+  const cur = getSetting('general')
+  const [f, setF] = useState({ title: 'מזנון הישיבה', ...cur })
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
+  return (
+    <div className="card">
+      <h3>🏪 פרטי המזנון</h3>
+      <p className="muted small">מופיעים במחירון ובהזמנות לספקים (וואטסאפ / מייל).</p>
+      <div className="form-grid">
+        <Field label="שם המזנון">
+          <input value={f.title || ''} onChange={set('title')} />
+        </Field>
+        <Field label="איש קשר להזמנות">
+          <input value={f.contactName || ''} onChange={set('contactName')} />
+        </Field>
+        <Field label="טלפון">
+          <input value={f.phone || ''} onChange={set('phone')} inputMode="tel" dir="ltr" />
+        </Field>
+        <Field label="כתובת למשלוח">
+          <input value={f.address || ''} onChange={set('address')} />
+        </Field>
+      </div>
+      <button
+        className="btn primary"
+        onClick={() => {
+          setSetting('general', { ...f, title: (f.title || '').trim() || 'מזנון' })
+          toast('נשמר')
+        }}
+      >
+        שמור
+      </button>
+    </div>
   )
 }

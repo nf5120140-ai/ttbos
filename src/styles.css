@@ -1346,3 +1346,370 @@ main {
   font-size: 14px;
   line-height: 1.6;
 }
+
+/* ---------- credit / terminal ---------- */
+.pay-btns.small-pay .btn {
+  padding: 10px 8px;
+  font-size: 15px;
+}
+.nedarim {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nedarim iframe {
+  border-radius: 10px;
+  background: #fff;
+}
+.pay-amount {
+  text-align: center;
+  font-size: 34px;
+  font-weight: 800;
+  color: var(--navy);
+}
+.paid-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+  align-items: stretch;
+}
+.paid-ok {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--green);
+}
+.verify {
+  padding: 10px;
+  border-radius: 10px;
+  background: #fff3d6;
+  color: var(--amber);
+  font-weight: 700;
+}
+.verify.ok {
+  background: #dff5e7;
+  color: var(--green);
+}
+.login-box.parent {
+  width: min(520px, 100%);
+}
+.warn-card {
+  border: 1.5px solid #f3d48b;
+}
+
+/* ---------- invoice ---------- */
+.pages {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.page-thumb {
+  position: relative;
+  width: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.page-thumb img,
+.page-thumb .pdf {
+  width: 96px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #faf6ec;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  color: var(--red);
+}
+.page-thumb .icon-btn {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: #fffc;
+  padding: 2px 6px;
+}
+.inv-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.inv-line {
+  display: grid;
+  grid-template-columns: 28px minmax(120px, 1.2fr) minmax(160px, 1.4fr) 80px 90px minmax(150px, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.inv-line.low {
+  background: #fff8e6;
+  border-color: #f3d48b;
+}
+.inv-line.off {
+  opacity: 0.45;
+}
+.inv-doc {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.inv-match {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.inv-num {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: var(--muted);
+}
+.inv-num input {
+  padding: 6px;
+}
+.inv-new {
+  display: flex;
+  gap: 4px;
+}
+.inv-new input {
+  padding: 6px;
+}
+@media (max-width: 780px) {
+  .inv-line {
+    grid-template-columns: 28px 1fr 1fr;
+  }
+  .inv-match,
+  .inv-new {
+    grid-column: 2 / -1;
+  }
+}
+.pw-wrap {
+  position: relative;
+  display: flex;
+}
+.pw-wrap .icon-btn {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.info {
+  background: #e3ecff;
+  color: #2747a8;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.link {
+  background: none;
+  border: none;
+  color: var(--navy-2);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px;
+}
+.login-box .err {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- מחירון ---------- */
+.pl-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #5b6170;
+  display: flex;
+  flex-direction: column;
+}
+.pl-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: #fff;
+  padding: 8px 12px;
+  box-shadow: var(--shadow);
+}
+.pl-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 10px 40px;
+}
+.pl-sheet {
+  background: #fff;
+  width: min(210mm, 100%);
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 14mm 14mm 22mm;
+  box-shadow: 0 10px 40px #0005;
+  color: #1b1f2a;
+  font-size: 15px;
+  display: flex;
+  flex-direction: column;
+}
+.pl-sheet.big {
+  font-size: 19px;
+}
+.pl-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 3px solid var(--gold);
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+}
+.pl-logo {
+  width: 54px;
+  height: 54px;
+  border-radius: 13px;
+  background: var(--navy);
+  color: var(--gold);
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.pl-head h1 {
+  font-size: 2.2em;
+  color: var(--navy);
+  line-height: 1;
+}
+.pl-sub {
+  font-size: 1.1em;
+  color: #555;
+  font-weight: 600;
+}
+.pl-date {
+  margin-inline-start: auto;
+  text-align: center;
+  font-size: 0.85em;
+  color: #555;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+.pl-body {
+  column-gap: 10mm;
+  column-rule: 1px solid #eee;
+  flex: 1;
+}
+.pl-group {
+  break-inside: avoid;
+  margin-bottom: 12px;
+}
+.pl-group h2 {
+  font-size: 1.15em;
+  color: #fff;
+  background: var(--navy);
+  border-radius: 8px;
+  padding: 4px 10px;
+  margin-bottom: 4px;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.pl-group.abc h2 {
+  background: none;
+  color: var(--navy);
+  border-bottom: 2px solid var(--gold);
+  border-radius: 0;
+  padding: 2px 2px;
+  width: 1.6em;
+  text-align: center;
+}
+.pl-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 2px;
+  break-inside: avoid;
+}
+.pl-row .thumb {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.pl-name {
+  font-weight: 600;
+}
+.pl-dots {
+  flex: 1;
+  border-bottom: 2px dotted #c9c3b5;
+  margin: 0 4px;
+  transform: translateY(4px);
+  min-width: 12px;
+}
+.pl-price {
+  font-weight: 800;
+  color: var(--navy);
+  white-space: nowrap;
+}
+.pl-staff {
+  font-weight: 600;
+  color: #777;
+  font-size: 0.75em;
+}
+.pl-foot {
+  margin-top: 16px;
+  border-top: 1.5px solid var(--line);
+  padding-top: 8px;
+  text-align: center;
+  font-size: 0.85em;
+  color: #444;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  body.pl-printing > #root {
+    display: none !important;
+  }
+  :root:has(body.pl-printing),
+  body.pl-printing {
+    background: #fff !important;
+  }
+  body.pl-printing .pl-wrap {
+    position: static;
+    background: #fff;
+    display: block;
+  }
+  body.pl-printing .pl-controls {
+    display: none !important;
+  }
+  body.pl-printing .pl-scroll {
+    overflow: visible;
+    padding: 0;
+  }
+  body.pl-printing .pl-sheet {
+    box-shadow: none;
+    width: 210mm;
+    min-height: auto;
+    padding: 12mm 12mm 18mm;
+  }
+  body.pl-printing .pl-foot {
+    position: fixed;
+    bottom: 6mm;
+    left: 12mm;
+    right: 12mm;
+    margin: 0;
+    background: #fff;
+  }
+}
+@media (max-width: 780px) {
+  .pl-sheet {
+    padding: 16px;
+    min-height: auto;
+  }
+}

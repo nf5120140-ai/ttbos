@@ -35,6 +35,9 @@ export const status = {
   mode: sb ? 'cloud' : 'local',
   online: typeof navigator !== 'undefined' ? navigator.onLine : true,
   authed: false,
+  email: '',
+  member: null, // null = לא נבדק, true / false
+  recovery: false,
   syncing: false,
   lastSync: null,
   error: null,
@@ -54,7 +57,7 @@ export function onStatus(fn) {
 let running = false
 let again = false
 export async function syncNow() {
-  if (!sb || !status.authed || !navigator.onLine) {
+  if (!sb || !status.authed || status.member === false || !navigator.onLine) {
     setStatus({})
     return
   }
@@ -125,10 +128,12 @@ export async function startSync() {
   window.addEventListener('offline', () => setStatus({ online: false }))
   if (!sb) return
   const { data } = await sb.auth.getSession()
-  setStatus({ authed: !!data.session })
-  sb.auth.onAuthStateChange((_e, session) => {
-    setStatus({ authed: !!session })
-    if (session) syncNow()
+  setStatus({ authed: !!data.session, email: data.session?.user?.email || '' })
+  if (data.session) checkMember()
+  sb.auth.onAuthStateChange((event, session) => {
+    setStatus({ authed: !!session, email: session?.user?.email || '', ...(event === 'PASSWORD_RECOVERY' ? { recovery: true } : {}) })
+    if (event === 'SIGNED_IN' || event === 'PASSWORD_RECOVERY') checkMember()
+    if (event === 'SIGNED_OUT') setStatus({ member: null })
   })
   setInterval(syncNow, 20000)
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && syncNow())
@@ -144,10 +149,114 @@ export async function startSync() {
   if (data.session) syncNow()
 }
 
+/** האם המשתמש המחובר שייך למזנון (המייל הראשון שנרשם, או מי שהמנהל אישר) */
+export async function checkMember() {
+  if (!sb) return true
+  if (!navigator.onLine && localStorage.getItem('tt_member') !== '0') {
+    setStatus({ member: true })
+    return true
+  }
+  const { data, error } = await sb.rpc('tt_is_member')
+  let member
+  if (error) {
+    // מבנה ישן בלי טבלת חברים — כל מי שמחובר מורשה
+    member = /tt_is_member|function|PGRST202/i.test(error.message || '') ? true : localStorage.getItem('tt_member') === '1'
+  } else member = !!data
+  try {
+    localStorage.setItem('tt_member', member ? '1' : '0')
+  } catch {}
+  setStatus({ member })
+  if (member) syncNow()
+  return member
+}
+
+const heAuthError = (e) => {
+  const m = String(e?.message || e)
+  if (/invalid login credentials/i.test(m)) return 'מייל או סיסמה לא נכונים'
+  if (/email not confirmed/i.test(m)) return 'המייל עוד לא אושר — פתח את המייל ולחץ על קישור האישור'
+  if (/already registered|already exists/i.test(m)) return 'already'
+  if (/signups? not allowed|signup is disabled/i.test(m)) return 'הרשמה חדשה כבויה בשרת — היכנס עם המייל הקיים'
+  if (/password should be at least|weak password/i.test(m)) return 'הסיסמה קצרה מדי (לפחות 6 תווים)'
+  if (/rate limit/i.test(m)) return 'יותר מדי ניסיונות — נסה שוב בעוד כמה דקות'
+  if (/failed to fetch|network/i.test(m)) return 'אין חיבור לשרת — בדוק אינטרנט / נטפרי'
+  return m
+}
+
 export async function cloudLogin(email, password) {
   const { error } = await sb.auth.signInWithPassword({ email, password })
-  if (error) throw error
+  if (error) throw new Error(heAuthError(error))
+  return checkMember()
+}
+/** רישום ראשון. מחזיר 'ok' | 'confirm' (צריך לאשר במייל) | 'exists' */
+export async function cloudSignup(email, password) {
+  const { data, error } = await sb.auth.signUp({ email, password })
+  if (error) {
+    const m = heAuthError(error)
+    if (m === 'already') return 'exists'
+    throw new Error(m)
+  }
+  // Supabase מחזיר משתמש בלי identities כשהמייל כבר קיים
+  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) return 'exists'
+  if (!data.session) return 'confirm'
+  await checkMember()
+  return 'ok'
+}
+export async function cloudResetPassword(email) {
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin })
+  if (error) throw new Error(heAuthError(error))
+}
+export async function cloudSetPassword(password) {
+  const { error } = await sb.auth.updateUser({ password })
+  if (error) throw new Error(heAuthError(error))
+  setStatus({ recovery: false })
 }
 export async function cloudLogout() {
+  try {
+    localStorage.removeItem('tt_member')
+  } catch {}
   await sb.auth.signOut()
+}
+
+// ---------- פונקציות שרת (Edge Functions) ----------
+export const SB_URL = cfg.url
+export const SB_KEY = cfg.key
+export const nedarimFnUrl = cfg.url ? cfg.url.replace(/\/$/, '') + '/functions/v1/nedarim' : ''
+
+/** קריאה לפונקציה ציבורית (בלי התחברות) — לדף הטעינה של ההורים */
+export async function callPublicFn(name, body) {
+  const r = await fetch(cfg.url.replace(/\/$/, '') + '/functions/v1/' + name, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: cfg.key },
+    body: JSON.stringify(body),
+  })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok || j.error) throw new Error(j.error || 'שגיאת שרת ' + r.status)
+  return j
+}
+
+/** קריאה לפונקציה עם המשתמש המחובר (קופה) */
+export async function callAuthFn(name, body) {
+  if (!sb) throw new Error('השרת לא מוגדר')
+  const { data, error } = await sb.functions.invoke(name, { body })
+  if (error) {
+    let msg = error.message
+    try {
+      const j = await error.context?.json()
+      if (j?.error) msg = j.error
+    } catch {}
+    throw new Error(msg)
+  }
+  if (data?.error) throw new Error(data.error)
+  return data
+}
+
+/** מחכה שכל השינויים המקומיים יגיעו לשרת */
+export async function flushNow(timeoutMs = 8000) {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeoutMs) {
+    await syncNow()
+    if (outboxSize() === 0) return true
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return outboxSize() === 0
 }

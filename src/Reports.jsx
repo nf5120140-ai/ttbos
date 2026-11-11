@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { list, get, save, drawerStatus, deviceName, round2 } from './db.js'
-import { useVersion, money, fmtDT, toast, Empty, downloadFile, toCsv, ProductThumb } from './ui.jsx'
+import { list, get, save, drawerStatus, deviceName, deviceId, round2, approvePaymentManually, dismissPayment } from './db.js'
+import { useVersion, money, fmtDT, toast, Empty, downloadFile, toCsv, ProductThumb, confirmDlg } from './ui.jsx'
 
 // ---------- טווחי תאריכים ----------
 function startOf(type, d) {
@@ -34,7 +34,7 @@ function label(type, start) {
   return 'שנת ' + start.getFullYear()
 }
 
-export function Reports() {
+export function Reports({ user }) {
   const v = useVersion()
   const [type, setType] = useState('day')
   const [anchor, setAnchor] = useState(() => startOf('day', new Date()))
@@ -59,6 +59,14 @@ export function Reports() {
       ok.filter((s) => s.payment === 'wallet'),
       (s) => s.total
     )
+    const credit = sum(
+      ok.filter((s) => s.payment === 'credit'),
+      (s) => s.total
+    )
+    const terminal = sum(
+      ok.filter((s) => s.payment === 'terminal'),
+      (s) => s.total
+    )
     const discounts = sum(ok, (s) => s.discount || 0)
     const cost = sum(ok, (s) => s.items.reduce((a, i) => a + i.qty * (i.cost || 0), 0))
     const profit = round2(revenue - cost)
@@ -67,9 +75,24 @@ export function Reports() {
       tops.filter((t) => t.method === 'cash'),
       (t) => t.amount
     )
-    const topOther = sum(
-      tops.filter((t) => t.method !== 'cash'),
+    const topCredit = sum(
+      tops.filter((t) => t.method === 'credit'),
       (t) => t.amount
+    )
+    const topTerminal = sum(
+      tops.filter((t) => t.method === 'terminal'),
+      (t) => t.amount
+    )
+    const topOther = sum(
+      tops.filter((t) => !['cash', 'credit', 'terminal'].includes(t.method)),
+      (t) => t.amount
+    )
+    const stale = new Date(Date.now() - 5 * 60000).toISOString()
+    const checkPayments = list('payment').filter(
+      (p) =>
+        p.createdAt >= sIso &&
+        p.createdAt < eIso &&
+        (p.status === 'suspicious' || p.status === 'orphan' || (p.status === 'client_ok' && p.updatedAt < stale))
     )
 
     // buckets
@@ -100,9 +123,10 @@ export function Reports() {
     // by seller
     const bySeller = new Map()
     for (const s of ok) {
-      const x = bySeller.get(s.sellerId) || { name: users.get(s.sellerId) || '—', n: 0, total: 0 }
+      const x = bySeller.get(s.sellerId) || { name: users.get(s.sellerId) || '—', n: 0, total: 0, terminal: 0 }
       x.n++
       x.total += s.total
+      if (s.payment === 'terminal') x.terminal += s.total
       bySeller.set(s.sellerId, x)
     }
     for (const s of voided) {
@@ -139,6 +163,11 @@ export function Reports() {
       revenue,
       cash,
       wallet,
+      credit,
+      terminal,
+      topCredit,
+      topTerminal,
+      checkPayments,
       discounts,
       profit,
       hasCost: ok.some((s) => s.items.some((i) => i.cost)),
@@ -166,7 +195,7 @@ export function Reports() {
         d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }),
         s.items.map((i) => `${i.name} x${i.qty}`).join(' | '),
         s.customerId ? get('customer', s.customerId)?.name : '',
-        s.payment === 'cash' ? 'מזומן' : 'ארנק',
+        { cash: 'מזומן', wallet: 'ארנק', credit: 'אשראי אונליין', terminal: 'אשראי במסופון' }[s.payment] || s.payment,
         s.total,
         s.discount || 0,
         r.users.get(s.sellerId),
@@ -231,9 +260,15 @@ export function Reports() {
         <Kpi label="סה״כ מכירות" value={money(r.revenue)} sub={`${r.ok.length} עסקאות`} big />
         <Kpi label="מזומן" value={money(r.cash)} />
         <Kpi label="מהארנק" value={money(r.wallet)} />
+        {r.credit > 0 && <Kpi label="אשראי אונליין" value={money(r.credit)} />}
+        {r.terminal > 0 && <Kpi label="אשראי במסופון" value={money(r.terminal)} />}
         <Kpi label="ממוצע לעסקה" value={money(r.ok.length ? r.revenue / r.ok.length : 0)} />
         {r.hasCost && <Kpi label="רווח גולמי" value={money(r.profit)} sub={r.revenue ? Math.round((r.profit / r.revenue) * 100) + '%' : ''} />}
-        <Kpi label="טעינות ארנק" value={money(r.topCash + r.topOther)} sub={`מזומן ${money(r.topCash)} · אחר ${money(r.topOther)}`} />
+        <Kpi
+          label="טעינות ארנק"
+          value={money(r.topCash + r.topOther + r.topCredit + r.topTerminal)}
+          sub={`מזומן ${money(r.topCash)} · אשראי ${money(r.topCredit)}${r.topTerminal ? ' · מסופון ' + money(r.topTerminal) : ''} · אחר ${money(r.topOther)}`}
+        />
         <Kpi label="הנחות" value={money(r.discounts)} />
         <Kpi label="ביטולים" value={r.voided.length} sub={money(r.voided.reduce((a, s) => a + s.total, 0))} warn={r.voided.length > 0} />
       </div>
@@ -287,6 +322,7 @@ export function Reports() {
                 <th>מוכר</th>
                 <th>עסקאות</th>
                 <th>סכום</th>
+                <th>מתוכו במסופון</th>
                 <th>ביטולים</th>
               </tr>
             </thead>
@@ -296,6 +332,7 @@ export function Reports() {
                   <td>{s.name}</td>
                   <td>{s.n}</td>
                   <td>{money(s.total)}</td>
+                  <td>{s.terminal ? money(s.terminal) : '—'}</td>
                   <td className={s.voids ? 'warn' : ''}>{s.voids || 0}</td>
                 </tr>
               ))}
@@ -315,6 +352,46 @@ export function Reports() {
             ))}
         </div>
       </div>
+
+      {r.checkPayments.length > 0 && (
+        <div className="card warn-card">
+          <h3>⚠ תשלומי אשראי לבדיקה</h3>
+          <p className="muted small">תשלומים שלא קיבלו אישור תקין מנדרים פלוס. כדאי להשוות מול דוח העסקאות בנדרים.</p>
+          <table>
+            <tbody>
+              {r.checkPayments.map((p) => (
+                <tr key={p.id}>
+                  <td>{fmtDT(p.createdAt)}</td>
+                  <td>{p.purpose === 'sale' ? 'מכירה' : p.purpose === 'topup' ? 'טעינה' + (p.customerId ? ' — ' + (get('customer', p.customerId)?.name || '') : '') : '?'}</td>
+                  <td>{money(p.amount)}</td>
+                  <td>
+                    {p.status === 'client_ok' ? 'לא הגיע אישור מהשרת' : p.status === 'suspicious' ? (p.problems || []).join(', ') : 'תשלום לא מזוהה'}
+                  </td>
+                  <td className="small">{p.clientResponse?.Confirmation || p.confirmation || ''}</td>
+                  <td className="nowrap">
+                    {user?.role === 'manager' && p.status !== 'orphan' && p.status !== 'client_ok' && (
+                      <button
+                        className="btn small green"
+                        onClick={async () => {
+                          if (await confirmDlg(`בדקת בנדרים פלוס שהתקבל תשלום של ${money(p.amount)}? הפעולה תרשום את ${p.purpose === 'topup' ? 'הטעינה' : 'המכירה'}.`, 'אשר ידנית'))
+                            approvePaymentManually(p.id, user.id)
+                        }}
+                      >
+                        אשר ידנית
+                      </button>
+                    )}{' '}
+                    {user?.role === 'manager' && (
+                      <button className="btn small" onClick={() => dismissPayment(p.id, user.id)}>
+                        הסתר
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {r.voided.length > 0 && (
         <div className="card">
@@ -359,7 +436,17 @@ export function CashCount({ user }) {
   const [direct, setDirect] = useState('')
   const [left, setLeft] = useState('')
   const [note, setNote] = useState('')
+  const [termCounted, setTermCounted] = useState('')
   const st = useMemo(() => drawerStatus(), [v])
+  const termDiff = termCounted === '' ? null : round2(Number(termCounted) - st.terminalExpected)
+  const termTx = useMemo(() => {
+    const since = st.last ? st.last.createdAt : '0000'
+    const dev = deviceId()
+    const out = []
+    for (const s of list('sale')) if (s.payment === 'terminal' && s.createdAt > since && s.device === dev) out.push({ at: s.createdAt, amount: s.total, who: s.sellerId, t: s.terminal, voided: !!s.voided, what: 'מכירה' })
+    for (const w of list('wallet')) if (w.method === 'terminal' && w.type === 'topup' && w.createdAt > since && w.device === dev) out.push({ at: w.createdAt, amount: w.amount, who: w.userId, t: w.terminal, voided: !!w.voided, what: 'טעינה' })
+    return out.sort((a, b) => (a.at < b.at ? 1 : -1))
+  }, [v, st])
   const byDenoms = round2(DENOMS.reduce((s, d) => s + d * (Number(qty[d]) || 0), 0))
   const counted = direct !== '' ? Number(direct) : byDenoms
   const diff = round2(counted - st.expected)
@@ -379,6 +466,10 @@ export function CashCount({ user }) {
       walletSales: st.walletSales,
       cashTopups: st.cashTopups,
       salesCount: st.salesCount,
+      creditSales: st.creditSales,
+      terminalExpected: st.terminalExpected,
+      terminalCounted: termCounted === '' ? null : Number(termCounted),
+      terminalDiff: termDiff,
       denoms: qty,
       leftInDrawer: leftIn,
       removed: round2(counted - leftIn),
@@ -390,6 +481,7 @@ export function CashCount({ user }) {
     setDirect('')
     setLeft('')
     setNote('')
+    setTermCounted('')
     toast(diff === 0 ? '✓ הקופה מאוזנת' : `נשמר. ${diff > 0 ? 'עודף' : 'חוסר'} של ${money(Math.abs(diff))}`, diff === 0 ? 'ok' : 'err')
   }
 
@@ -422,6 +514,12 @@ export function CashCount({ user }) {
             <span>מכירות מהארנק (לא במזומן)</span>
             <span>{money(st.walletSales)}</span>
           </div>
+          {st.creditSales > 0 && (
+            <div className="sum-row muted">
+              <span>מכירות באשראי (נדרים)</span>
+              <span>{money(st.creditSales)}</span>
+            </div>
+          )}
           <div className="muted small">{st.salesCount} עסקאות במשמרת{st.voids > 0 ? ` · ${st.voids} ביטולים` : ''}</div>
         </div>
 
@@ -459,6 +557,41 @@ export function CashCount({ user }) {
         </div>
       </div>
 
+      {(st.terminalExpected > 0 || termTx.length > 0) && (
+        <div className="card">
+          <h3>📟 התאמה מול המסופון</h3>
+          <p className="muted small">הקלד את סה״כ האשראי מסגירת היום במסופון (או מדוח העסקאות בנדרים). אם בתתבוס רשום יותר — מישהו רשם תשלום בלי לסלוק.</p>
+          <div className="sum-row">
+            <span>רשום בתתבוס כאשראי במסופון</span>
+            <b>{money(st.terminalExpected)}</b>
+          </div>
+          <div className="row gap-s">
+            <span className="muted">סה״כ לפי המסופון:</span>
+            <input type="number" inputMode="decimal" value={termCounted} onChange={(e) => setTermCounted(e.target.value)} placeholder="מהפתק של סגירת היום" />
+          </div>
+          {termDiff !== null && (
+            <div className={'diff ' + (termDiff === 0 ? 'ok' : 'under')}>
+              {termDiff === 0 ? '✓ תואם למסופון' : termDiff < 0 ? `⚠ בתתבוס ${money(-termDiff)} יותר ממה שנסלק במסופון` : `במסופון ${money(termDiff)} יותר ממה שנרשם בתתבוס`}
+            </div>
+          )}
+          <table>
+            <tbody>
+              {termTx.map((x, i) => (
+                <tr key={i} className={x.voided ? 'voided' : ''}>
+                  <td>{fmtDT(x.at)}</td>
+                  <td>{x.what}</td>
+                  <td>{money(x.amount)}</td>
+                  <td>{users.get(x.who) || ''}</td>
+                  <td className="small">
+                    אישור {x.t?.confirmation} · {x.t?.phone || ''} {x.t?.last4 ? '· ****' + x.t.last4 : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <h3 className="section-title">היסטוריית ספירות</h3>
       <div className="table-wrap">
         <table>
@@ -469,6 +602,7 @@ export function CashCount({ user }) {
               <th>צפוי</th>
               <th>נספר</th>
               <th>הפרש</th>
+              <th>מסופון</th>
               <th>הוצא</th>
               <th>נשאר</th>
               <th>ע״י</th>
@@ -482,6 +616,7 @@ export function CashCount({ user }) {
                 <td>{money(c.expected)}</td>
                 <td>{money(c.counted)}</td>
                 <td className={c.diff === 0 ? 'pos-bal' : 'neg'}>{c.diff > 0 ? '+' : ''}{money(c.diff)}</td>
+                <td className={c.terminalDiff ? 'neg' : ''}>{c.terminalCounted != null ? (c.terminalDiff ? 'הפרש ' + money(c.terminalDiff) : '✓') : '—'}</td>
                 <td>{money(c.removed || 0)}</td>
                 <td>{money(c.leftInDrawer)}</td>
                 <td>

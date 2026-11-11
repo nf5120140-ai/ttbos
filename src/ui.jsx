@@ -26,6 +26,7 @@ export const fmtDT = (iso) => fmtDate(iso) + ' ' + fmtTime(iso)
 export function can(user, perm) {
   if (!user) return false
   if (user.role === 'manager') return true
+  if (perm === 'terminal') return user.perms?.terminal !== false // אשראי במסופון — פתוח כברירת מחדל
   return !!user.perms?.[perm]
 }
 

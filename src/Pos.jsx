@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { list, get, balanceOf, stockOf, sell, voidSale, unitPrice, deviceId, round2 } from './db.js'
+import { list, get, balanceOf, stockOf, sell, buildSale, voidSale, unitPrice, deviceId, round2 } from './db.js'
+import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
 import {
   useVersion,
   money,
@@ -30,6 +31,9 @@ export default function Pos({ user }) {
   const [cam, setCam] = useState(false)
   const [recent, setRecent] = useState(false)
   const [cartOpen, setCartOpen] = useState(false)
+  const [creditOpen, setCreditOpen] = useState(false)
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const credit = creditStatus()
 
   const products = useMemo(() => list('product').filter((p) => p.active !== false), [v])
   const customer = customerId ? get('customer', customerId) : null
@@ -112,7 +116,7 @@ export default function Pos({ user }) {
     toast('לא נמצא ברקוד ' + code, 'err')
     return false
   }
-  useBarcodeScanner(handleCode, !picker && !cashModal && !cam)
+  useBarcodeScanner(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen)
 
   function items() {
     return lines.map((l) => ({ productId: l.p.id, name: l.p.name, qty: l.qty, price: l.price, cost: Number(l.p.cost) || 0 }))
@@ -132,6 +136,16 @@ export default function Pos({ user }) {
     const change = round2((received || total) - total)
     toast(change > 0 ? `✓ שולם. עודף: ${money(change)}` : '✓ שולם במזומן')
     setCashModal(false)
+    clear()
+  }
+
+  function saleArgs(payment) {
+    return { items: items(), customerId: customer?.id || null, payment, discountPct, sellerId: user.id, staff }
+  }
+  function payTerminal(t) {
+    sell({ ...saleArgs('terminal'), extra: { terminal: t } })
+    toast('✓ נרשם — שולם באשראי במסופון')
+    setTerminalOpen(false)
     clear()
   }
 
@@ -292,6 +306,18 @@ export default function Pos({ user }) {
               💵 מזומן
             </button>
           </div>
+          <div className="pay-btns small-pay">
+            {can(user, 'terminal') && (
+              <button className="btn" disabled={!lines.length} onClick={() => setTerminalOpen(true)}>
+                📟 אשראי במסופון
+              </button>
+            )}
+            {credit.ok && (
+              <button className="btn" disabled={!lines.length} onClick={() => setCreditOpen(true)}>
+                💳 אשראי אונליין
+              </button>
+            )}
+          </div>
           <div className="row gap-s">
             <button className="btn small grow" disabled={!lines.length && !customer} onClick={clear}>
               🗑 נקה
@@ -315,6 +341,23 @@ export default function Pos({ user }) {
         />
       )}
       {recent && <RecentSales user={user} onClose={() => setRecent(false)} />}
+      {creditOpen && (
+        <CreditModal
+          title="תשלום באשראי"
+          amount={total}
+          purpose="sale"
+          customerId={customer?.id}
+          user={user}
+          comment={'מזנון: ' + lines.map((l) => l.p.name + (l.qty > 1 ? '×' + l.qty : '')).join(', ')}
+          buildOps={() => buildSale({ ...saleArgs('credit') }).ops}
+          onPaid={() => {
+            toast('✓ שולם באשראי')
+            clear()
+          }}
+          onClose={() => setCreditOpen(false)}
+        />
+      )}
+      {terminalOpen && <TerminalModal amount={total} defaultPhone={customer?.phone || ''} onConfirm={payTerminal} onClose={() => setTerminalOpen(false)} />}
     </div>
   )
 }
@@ -405,7 +448,13 @@ function RecentSales({ user, onClose }) {
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
     .slice(0, 40)
   async function doVoid(s) {
-    if (!(await confirmDlg(`לבטל מכירה של ${money(s.total)}? הכסף יחזור לארנק / ללקוח והמלאי יעודכן.`, 'בטל מכירה'))) return
+    const extra =
+      s.payment === 'credit'
+        ? ' ⚠ שולם באשראי — את הזיכוי בכרטיס צריך לעשות בנדרים פלוס.'
+        : s.payment === 'terminal'
+          ? ' ⚠ שולם באשראי במסופון — את הזיכוי צריך לעשות במסופון / בנדרים.'
+          : ''
+    if (!(await confirmDlg(`לבטל מכירה של ${money(s.total)}? המלאי יעודכן${s.payment === 'wallet' ? ' והכסף יחזור לארנק' : ''}.${extra}`, 'בטל מכירה'))) return
     voidSale(s, user.id)
     toast('המכירה בוטלה')
   }
@@ -437,7 +486,16 @@ function RecentSales({ user, onClose }) {
                 </td>
                 <td>{s.items.map((i) => `${i.name}${i.qty > 1 ? ' ×' + i.qty : ''}`).join(', ')}</td>
                 <td>{s.customerId ? get('customer', s.customerId)?.name || '—' : '—'}</td>
-                <td>{s.payment === 'cash' ? 'מזומן' : 'ארנק'}</td>
+                <td>
+                  {paymentLabel(s.payment)}
+                  {s.payment === 'credit' && !s.verified && <small className="warn"> (ממתין לאישור)</small>}
+                  {s.terminal && (
+                    <small className="muted">
+                      {' '}
+                      אישור {s.terminal.confirmation} · {s.terminal.phone}
+                    </small>
+                  )}
+                </td>
                 <td>
                   <b>{money(s.total)}</b>
                   {s.discount > 0 && <small className="muted"> ({s.discountPct}%−)</small>}

@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react'
-import { list, get, save, remove, balanceOf, stockOf, topup, voidTopup, receiveStock, setStockTo, round2 } from './db.js'
+import { list, get, save, remove, balanceOf, stockOf, topup, buildTopup, voidTopup, receiveStock, setStockTo, round2, getSetting } from './db.js'
+import { CreditModal, TerminalModal, creditStatus } from './Credit.jsx'
+import { InvoiceIntake } from './Invoice.jsx'
+import { PriceList } from './PriceList.jsx'
 import {
   useVersion,
   money,
@@ -187,19 +190,53 @@ function TopupModal({ c, user, onClose }) {
   const [amt, setAmt] = useState('')
   const [method, setMethod] = useState('cash')
   const [note, setNote] = useState('')
+  const [step, setStep] = useState(null) // null | credit | terminal
+  const credit = creditStatus()
+  const a = Number(amt)
   function ok() {
-    const a = Number(amt)
-    if (!a) return toast('הכנס סכום', 'err')
+    if (!a || a <= 0) return toast('הכנס סכום', 'err')
+    if (method === 'credit') {
+      if (!credit.ok) return toast(credit.why, 'err')
+      return setStep('credit')
+    }
+    if (method === 'terminal') return setStep('terminal')
     topup(c.id, a, method, user.id, note)
     toast(`נטען ${money(a)} ל${c.name}`)
     onClose()
   }
+  if (step === 'credit')
+    return (
+      <CreditModal
+        title={'טעינת ארנק באשראי — ' + c.name}
+        amount={a}
+        purpose="topup"
+        customerId={c.id}
+        user={user}
+        comment={'טעינת ארנק ' + c.name}
+        buildOps={() => [buildTopup(c.id, a, 'credit', user.id, note)]}
+        onPaid={() => toast(`✓ נטען ${money(a)} ל${c.name}`)}
+        onClose={onClose}
+      />
+    )
+  if (step === 'terminal')
+    return (
+      <TerminalModal
+        amount={a}
+        defaultPhone={c.parentPhone || ''}
+        onClose={() => setStep(null)}
+        onConfirm={(t) => {
+          topup(c.id, a, 'terminal', user.id, note, { terminal: t })
+          toast(`נטען ${money(a)} ל${c.name}`)
+          onClose()
+        }}
+      />
+    )
   return (
     <Modal title={'טעינת ארנק — ' + c.name} onClose={onClose} small>
       <p className="muted">יתרה נוכחית: {money(balanceOf(c.id))}</p>
       <div className="quick">
         {[20, 50, 100, 150, 200, 300].map((x) => (
-          <button key={x} className={'btn' + (Number(amt) === x ? ' primary' : '')} onClick={() => setAmt(String(x))}>
+          <button key={x} className={'btn' + (a === x ? ' primary' : '')} onClick={() => setAmt(String(x))}>
             {money(x)}
           </button>
         ))}
@@ -208,23 +245,28 @@ function TopupModal({ c, user, onClose }) {
       <div className="seg">
         {[
           ['cash', '💵 מזומן'],
+          creditStatus().ok && ['credit', '💳 אשראי אונליין'],
+          can(user, 'terminal') && ['terminal', '📟 אשראי במסופון'],
           ['transfer', '🏦 העברה / ביט'],
           ['office', '🏢 דרך המשרד'],
-        ].map(([k, l]) => (
-          <button key={k} className={method === k ? 'on' : ''} onClick={() => setMethod(k)}>
-            {l}
-          </button>
-        ))}
+        ]
+          .filter(Boolean)
+          .map(([k, l]) => (
+            <button key={k} className={method === k ? 'on' : ''} onClick={() => setMethod(k)}>
+              {l}
+            </button>
+          ))}
       </div>
+      {method === 'credit' && !credit.ok && <small className="err">{credit.why}</small>}
       <input placeholder="הערה (לא חובה)" value={note} onChange={(e) => setNote(e.target.value)} />
       <button className="btn green big grow" onClick={ok}>
-        ✓ טען
+        {method === 'credit' ? 'המשך לתשלום באשראי' : method === 'terminal' ? 'המשך — פרטי העסקה' : '✓ טען'}
       </button>
     </Modal>
   )
 }
 
-const METHOD = { cash: 'מזומן', transfer: 'העברה/ביט', office: 'משרד' }
+const METHOD = { cash: 'מזומן', transfer: 'העברה/ביט', office: 'משרד', credit: 'אשראי אונליין', terminal: 'אשראי במסופון' }
 const TXT = { topup: 'טעינה', purchase: 'קנייה', refund: 'החזר (ביטול)', topup_void: 'ביטול טעינה', adjust: 'תיקון' }
 
 function CustomerHistory({ c, user, onClose, onTopup }) {
@@ -246,8 +288,20 @@ function CustomerHistory({ c, user, onClose, onTopup }) {
     const text = `שלום, דו״ח מזנון עבור ${c.name}\nיתרה נוכחית: ${money(b)}\n\nתנועות אחרונות:\n${lines}`
     window.open(waLink(c.parentPhone, text), '_blank')
   }
+  function sendLink() {
+    const link = location.origin + '/?topup=' + c.id
+    const text = `שלום, זה קישור לטעינת הארנק של ${c.name} במזנון (תשלום מאובטח באשראי דרך נדרים פלוס):\n${link}`
+    if (c.parentPhone) window.open(waLink(c.parentPhone, text), '_blank')
+    else {
+      navigator.clipboard?.writeText(link).then(
+        () => toast('הקישור הועתק'),
+        () => prompt('העתק את הקישור', link)
+      )
+    }
+  }
   async function vt(t) {
-    if (!(await confirmDlg(`לבטל טעינה של ${money(t.amount)}?`, 'בטל טעינה'))) return
+    const extra = t.method === 'credit' ? ' ⚠ את הזיכוי בכרטיס צריך לעשות בנדרים פלוס.' : t.method === 'terminal' ? ' ⚠ את הזיכוי צריך לעשות במסופון.' : ''
+    if (!(await confirmDlg(`לבטל טעינה של ${money(t.amount)}?${extra}`, 'בטל טעינה'))) return
     voidTopup(t, user.id)
   }
   return (
@@ -268,7 +322,12 @@ function CustomerHistory({ c, user, onClose, onTopup }) {
           )}
           {c.parentPhone && (
             <button className="btn" onClick={sendParent}>
-              📲 שלח להורים
+              📲 שלח דו״ח להורים
+            </button>
+          )}
+          {creditStatus().ok && getSetting('nedarim').parentLinks !== false && (
+            <button className="btn" onClick={sendLink}>
+              🔗 קישור טעינה באשראי
             </button>
           )}
         </div>
@@ -294,6 +353,8 @@ function CustomerHistory({ c, user, onClose, onTopup }) {
                   <td>{TXT[t.type] || t.type}</td>
                   <td>
                     {s ? s.items.map((i) => i.name + (i.qty > 1 ? ' ×' + i.qty : '')).join(', ') : METHOD[t.method] || ''}
+                    {t.method === 'credit' && t.type === 'topup' && !t.verified && <small className="warn"> (ממתין לאישור)</small>}
+                    {t.terminal && <small className="muted"> אישור {t.terminal.confirmation} · {t.terminal.phone}</small>}
                     {t.note ? ' · ' + t.note : ''}
                   </td>
                   <td className={t.amount < 0 ? 'neg' : 'pos-bal'}>
@@ -328,6 +389,8 @@ export function Inventory({ user }) {
   const [edit, setEdit] = useState(null)
   const [recv, setRecv] = useState(null)
   const [countMode, setCountMode] = useState(false)
+  const [invoice, setInvoice] = useState(false)
+  const [priceList, setPriceList] = useState(false)
   const [counts, setCounts] = useState({})
   const products = useMemo(() => list('product'), [v])
   const suppliers = new Map(list('supplier').map((s) => [s.id, s.name]))
@@ -376,6 +439,12 @@ export function Inventory({ user }) {
               📋 ספירת מלאי
             </button>
           )}
+          <button className="btn" onClick={() => setPriceList(true)}>
+            🖨 מחירון
+          </button>
+          <button className="btn" onClick={() => setInvoice(true)}>
+            🧾 קליטת חשבונית
+          </button>
           <button className="btn primary" onClick={() => setEdit({ active: true, minStock: 5, parStock: 20 })}>
             + מוצר
           </button>
@@ -457,6 +526,8 @@ export function Inventory({ user }) {
       </div>
       {edit && <ProductEditor p={edit} user={user} onClose={() => setEdit(null)} />}
       {recv && <ReceiveModal p={recv} user={user} onClose={() => setRecv(null)} />}
+      {invoice && <InvoiceIntake user={user} onClose={() => setInvoice(false)} />}
+      {priceList && <PriceList onClose={() => setPriceList(false)} />}
     </div>
   )
 }
@@ -477,9 +548,11 @@ function ProductEditor({ p, user, onClose }) {
     : []
   async function pickImg(e) {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
     try {
-      setF({ ...f, img: await resizeImage(file) })
+      const img = await resizeImage(file, 320)
+      setF((prev) => ({ ...prev, img }))
     } catch {
       toast('לא הצלחתי לטעון תמונה', 'err')
     }
@@ -513,10 +586,16 @@ function ProductEditor({ p, user, onClose }) {
       <div className="row gap wrap">
         <div className="img-pick">
           <ProductThumb p={f} size={96} />
-          <label className="btn small">
-            📷 תמונה
-            <input type="file" accept="image/*" hidden onChange={pickImg} />
-          </label>
+          <div className="row gap-s">
+            <label className="btn small">
+              📷 צלם
+              <input type="file" accept="image/*" capture="environment" hidden onChange={pickImg} />
+            </label>
+            <label className="btn small">
+              🖼 גלריה
+              <input type="file" accept="image/*" hidden onChange={pickImg} />
+            </label>
+          </div>
           {f.img && (
             <button className="btn small" onClick={() => setF({ ...f, img: '' })}>
               הסר תמונה
@@ -687,7 +766,7 @@ export function Orders({ user }) {
                 <div>
                   <b>{s.name}</b>
                   <div className="muted small">
-                    {s.phone} {s.notes && '· ' + s.notes}
+                    {[s.phone, s.email, s.notes].filter(Boolean).join(' · ')}
                   </div>
                 </div>
                 <button className="icon-btn" onClick={() => setEditSup(s)}>
@@ -767,6 +846,9 @@ function SupplierEditor({ s, onClose }) {
       <Field label="טלפון / וואטסאפ">
         <input value={f.phone || ''} onChange={set('phone')} inputMode="tel" />
       </Field>
+      <Field label="מייל להזמנות">
+        <input value={f.email || ''} onChange={set('email')} type="email" dir="ltr" />
+      </Field>
       <Field label="הערות (ימי אספקה וכו׳)">
         <input value={f.notes || ''} onChange={set('notes')} />
       </Field>
@@ -804,14 +886,59 @@ function OrderEditor({ o, onClose }) {
     }
     return save('order', { ...o, lines: clean, status: status || o.status })
   }
-  function send() {
+  function orderText(rec) {
+    const g = getSetting('general')
+    const lines = rec.lines.map((l) => {
+      const p = get('product', l.productId)
+      return `• ${l.name} — ${l.qty} יח׳${p?.barcode ? ` (ברקוד ${p.barcode})` : ''}`
+    })
+    return [
+      `שלום${sup?.name ? ' ' + sup.name : ''},`,
+      `אבקש להזמין עבור ${g.title || 'המזנון'}:`,
+      '',
+      ...lines,
+      '',
+      `סה״כ ${rec.lines.length} פריטים.`,
+      g.address ? `כתובת למשלוח: ${g.address}` : '',
+      '',
+      'תודה,',
+      [g.contactName, g.phone].filter(Boolean).join(' · '),
+    ]
+      .filter((x, i, arr) => x !== '' || arr[i - 1] !== '')
+      .join('\n')
+      .trim()
+  }
+  function subject() {
+    const g = getSetting('general')
+    return `הזמנה מ${g.title || 'המזנון'} — ${new Date().toLocaleDateString('he-IL')}`
+  }
+  function send(via) {
     const rec = persist('sent')
     if (!rec) return
-    const text = `שלום, הזמנה מהמזנון:\n\n${rec.lines.map((l) => `• ${l.name} — ${l.qty}`).join('\n')}\n\nתודה!`
-    if (sup?.phone) window.open(waLink(sup.phone, text), '_blank')
-    else {
-      navigator.clipboard?.writeText(text)
-      toast('אין טלפון לספק — ההזמנה הועתקה')
+    const text = orderText(rec)
+    if (via === 'wa') {
+      if (sup?.phone) window.open(waLink(sup.phone, text), '_blank')
+      else {
+        navigator.clipboard?.writeText(text)
+        toast('אין טלפון לספק — ההזמנה הועתקה')
+      }
+    } else if (via === 'mail') {
+      const body = text.replace(/\n/g, '\r\n')
+      location.href = `mailto:${encodeURIComponent(sup?.email || '')}?subject=${encodeURIComponent(subject())}&body=${encodeURIComponent(body)}`
+    } else if (via === 'gmail') {
+      const u = new URL('https://mail.google.com/mail/')
+      u.searchParams.set('view', 'cm')
+      u.searchParams.set('fs', '1')
+      if (sup?.email) u.searchParams.set('to', sup.email)
+      u.searchParams.set('su', subject())
+      u.searchParams.set('body', text)
+      window.open(u.toString(), '_blank')
+    } else if (via === 'copy') {
+      navigator.clipboard?.writeText(text).then(
+        () => toast('ההזמנה הועתקה'),
+        () => toast('לא הצלחתי להעתיק', 'err')
+      )
+      return
     }
     onClose()
   }
@@ -837,6 +964,7 @@ function OrderEditor({ o, onClose }) {
           </button>
         </div>
       ))}
+      {!sup?.email && <p className="muted small">💡 אפשר להוסיף לספק כתובת מייל (בעריכת ספק ✎) — והיא תמולא אוטומטית בטיוטה.</p>}
       <div className="row gap-s">
         <select value={addId} onChange={(e) => setAddId(e.target.value)} className="grow">
           <option value="">+ הוסף מוצר…</option>
@@ -859,8 +987,17 @@ function OrderEditor({ o, onClose }) {
         </button>
       </div>
       <div className="row gap wrap modal-actions">
-        <button className="btn green grow" onClick={send}>
-          📲 שלח לספק בוואטסאפ
+        <button className="btn green grow" onClick={() => send('wa')}>
+          📲 וואטסאפ
+        </button>
+        <button className="btn primary grow" onClick={() => send('mail')} title="פותח טיוטה בתוכנת המייל עם כל פרטי ההזמנה">
+          📧 מייל
+        </button>
+        <button className="btn grow" onClick={() => send('gmail')} title="פותח טיוטה ב-Gmail בדפדפן">
+          Gmail
+        </button>
+        <button className="btn" onClick={() => send('copy')} title="העתק את נוסח ההזמנה">
+          📋
         </button>
         <button
           className="btn grow"

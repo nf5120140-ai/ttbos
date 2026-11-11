@@ -5,7 +5,7 @@
 // שעובדים בלי אינטרנט במקביל לא דורסים זה את זה.
 // ============================================================
 
-export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order']
+export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice']
 
 // מצב הדגמה: ttbos.vercel.app/?demo — נתוני דוגמה, בלי שרת, במסד נפרד שלא נוגע בנתונים האמיתיים
 export const DEMO = (() => {
@@ -302,12 +302,13 @@ export function unitPrice(product, staff) {
   return Number(product.price || 0)
 }
 
-/** מכירה. items: [{productId, name, qty, price, cost}] */
-export function sell({ items, customerId, payment, discountPct, sellerId, staff, received }) {
+/** בונה את כל הרשומות של מכירה (בלי לשמור). items: [{productId, name, qty, price, cost}] */
+export function buildSale({ items, customerId, payment, discountPct, sellerId, staff, received, extra = {} }) {
   const subtotal = round2(items.reduce((s, i) => s + i.qty * i.price, 0))
   const discount = round2((subtotal * (Number(discountPct) || 0)) / 100)
   const total = round2(subtotal - discount)
   const saleId = uid()
+  const now = nowIso()
   const ops = [
     [
       'sale',
@@ -324,14 +325,23 @@ export function sell({ items, customerId, payment, discountPct, sellerId, staff,
         staff: !!staff,
         received: payment === 'cash' ? Number(received) || total : null,
         deviceName: deviceName(),
+        device: deviceId(),
+        createdAt: now,
+        ...extra,
       },
     ],
   ]
-  for (const it of items) ops.push(['stock', { productId: it.productId, qty: -it.qty, reason: 'sale', ref: saleId, userId: sellerId }])
+  for (const it of items) ops.push(['stock', { id: uid(), productId: it.productId, qty: -it.qty, reason: 'sale', ref: saleId, userId: sellerId, createdAt: now }])
   if (payment === 'wallet' && customerId)
-    ops.push(['wallet', { customerId, amount: -total, type: 'purchase', ref: saleId, userId: sellerId }])
-  saveMany(ops)
-  return { id: saleId, total }
+    ops.push(['wallet', { id: uid(), customerId, amount: -total, type: 'purchase', ref: saleId, userId: sellerId, createdAt: now }])
+  return { id: saleId, total, ops }
+}
+
+/** מכירה ושמירה מיידית */
+export function sell(args) {
+  const r = buildSale(args)
+  saveMany(r.ops)
+  return { id: r.id, total: r.total }
 }
 
 export function voidSale(sale, userId, reason = '') {
@@ -343,16 +353,27 @@ export function voidSale(sale, userId, reason = '') {
   saveMany(ops)
 }
 
-export function topup(customerId, amount, method, userId, note = '') {
-  return save('wallet', {
-    customerId,
-    amount: round2(amount),
-    type: 'topup',
-    method,
-    userId,
-    note,
-    deviceName: deviceName(),
-  })
+export function buildTopup(customerId, amount, method, userId, note = '', extra = {}) {
+  return [
+    'wallet',
+    {
+      id: uid(),
+      customerId,
+      amount: round2(amount),
+      type: 'topup',
+      method,
+      userId,
+      note,
+      deviceName: deviceName(),
+      device: deviceId(),
+      createdAt: nowIso(),
+      ...extra,
+    },
+  ]
+}
+export function topup(customerId, amount, method, userId, note = '', extra = {}) {
+  const [k, o] = buildTopup(customerId, amount, method, userId, note, extra)
+  return save(k, o)
 }
 export function voidTopup(tx, userId) {
   if (tx.voided) return
@@ -381,7 +402,10 @@ export function drawerStatus(dev = deviceId()) {
   const opening = last ? Number(last.leftInDrawer || 0) : 0
   let cashSales = 0,
     walletSales = 0,
+    creditSales = 0,
+    terminalSales = 0,
     cashTopups = 0,
+    terminalTopups = 0,
     salesCount = 0,
     voids = 0
   for (const s of data.sale.values()) {
@@ -389,6 +413,7 @@ export function drawerStatus(dev = deviceId()) {
     if (s.createdAt <= since) {
       // מכירה ישנה שבוטלה אחרי הספירה — הכסף יצא מהמגירה עכשיו
       if (s.voided && s.voided.at > since && s.payment === 'cash') cashSales -= s.total
+      if (s.voided && s.voided.at > since && s.payment === 'terminal') terminalSales -= s.total
       continue
     }
     if (s.voided) {
@@ -397,12 +422,15 @@ export function drawerStatus(dev = deviceId()) {
     }
     salesCount++
     if (s.payment === 'cash') cashSales += s.total
+    else if (s.payment === 'credit') creditSales += s.total
+    else if (s.payment === 'terminal') terminalSales += s.total
     else walletSales += s.total
   }
   for (const w of data.wallet.values()) {
-    if (w.deleted || w.method !== 'cash' || w.createdAt <= since) continue
-    if (w.type === 'topup' && w.device === dev) cashTopups += w.amount
-    if (w.type === 'topup_void' && w.device === dev) cashTopups += w.amount
+    if (w.deleted || w.createdAt <= since || w.device !== dev) continue
+    if (w.type !== 'topup' && w.type !== 'topup_void') continue
+    if (w.method === 'cash') cashTopups += w.amount
+    if (w.method === 'terminal') terminalTopups += w.amount
   }
   return {
     last,
@@ -410,6 +438,10 @@ export function drawerStatus(dev = deviceId()) {
     cashSales: round2(cashSales),
     walletSales: round2(walletSales),
     cashTopups: round2(cashTopups),
+    creditSales: round2(creditSales),
+    terminalSales: round2(terminalSales),
+    terminalTopups: round2(terminalTopups),
+    terminalExpected: round2(terminalSales + terminalTopups),
     salesCount,
     voids,
     expected: round2(opening + cashSales + cashTopups),
@@ -427,4 +459,58 @@ export function ensureDefaultManager() {
       perms: { void: true, topup: true, discount: true, reports: true },
     })
   }
+}
+
+// ---------- הגדרות משותפות (מסונכרנות) ----------
+export function getSetting(id) {
+  return get('setting', id) || {}
+}
+export function setSetting(id, values) {
+  const cur = data.setting.get(id) || { id }
+  return save('setting', { ...cur, ...values, id })
+}
+
+// ---------- תשלום אשראי (נדרים פלוס) ----------
+/** יוצר רשומת תשלום ממתין. ops = הרשומות שייכתבו כשהתשלום יאושר */
+export function createPendingPayment({ purpose, amount, ops, customerId, userId }) {
+  return save('payment', {
+    purpose,
+    amount: round2(amount),
+    ops,
+    customerId: customerId || null,
+    userId: userId || null,
+    status: 'pending',
+    deviceName: deviceName(),
+  })
+}
+/** הדפדפן קיבל אישור מהאייפרם — רושמים את הפעולות מיד (אותם מזהים כמו בשרת, כך שאין כפילות) */
+export function commitPaymentClientSide(paymentId, resp) {
+  const p = data.payment.get(paymentId)
+  if (!p) return
+  const ops = (p.ops || []).map(([k, o]) => [k, { ...o }])
+  ops.push([
+    'payment',
+    {
+      ...p,
+      status: p.status === 'paid' ? 'paid' : 'client_ok',
+      clientResponse: { Confirmation: resp?.Confirmation || '', LastNum: resp?.LastNum || '', ID: resp?.ID || resp?.TransactionId || '' },
+    },
+  ])
+  saveMany(ops)
+}
+export function markPaymentFailed(paymentId, message) {
+  const p = data.payment.get(paymentId)
+  if (p && p.status === 'pending') save('payment', { ...p, status: 'failed', error: message || '' })
+}
+/** מנהל בדק בנדרים פלוס שהתשלום התקבל — רושם ידנית */
+export function approvePaymentManually(paymentId, userId) {
+  const p = data.payment.get(paymentId)
+  if (!p) return
+  const ops = (p.ops || []).map(([k, o]) => [k, { ...o, verified: true, manualBy: userId }])
+  ops.push(['payment', { ...p, status: 'paid', manualBy: userId, manualAt: nowIso() }])
+  saveMany(ops)
+}
+export function dismissPayment(paymentId, userId) {
+  const p = data.payment.get(paymentId)
+  if (p) save('payment', { ...p, status: 'dismissed', dismissedBy: userId })
 }
