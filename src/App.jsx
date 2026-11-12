@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { DEMO, initDb, list, getSetting, setSetting, get, save, saveMany, hashPin, ensureDefaultManager, deviceName, setDeviceName, wipeLocal, KINDS } from './db.js'
 import { startSync, syncNow, cloudConfigured, cloudLogin, cloudSignup, cloudResetPassword, cloudSetPassword, cloudLogout, setCloudConfig, nedarimFnUrl } from './sync.js'
 import { ParentTopup } from './Credit.jsx'
+import { useFingerprint, fpIdentify, fpEnroll } from './fp.js'
 import { seedDemo } from './seed.js'
 import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime } from './ui.jsx'
 import Pos from './Pos.jsx'
@@ -139,6 +140,23 @@ function SellerLogin({ onLogin }) {
   const [pin, setPin] = useState('')
   const [err, setErr] = useState('')
   const onlyDefault = users.length === 1 && users[0].pinHash === hashPin('1234')
+  const fp = useFingerprint()
+  const [fpBusy, setFpBusy] = useState(false)
+  const hasFp = users.some((u) => u.fpTemplates?.length)
+  async function fingerLogin() {
+    setErr('')
+    setFpBusy(true)
+    try {
+      const r = await fpIdentify()
+      const u = users.find((x) => x.id === r.userId)
+      if (!u) throw new Error('האצבע לא מזוהה')
+      if (sel && sel.id !== u.id) throw new Error(`האצבע שייכת ל${u.name}`)
+      onLogin(u)
+    } catch (e) {
+      setErr(e.message || String(e))
+    }
+    setFpBusy(false)
+  }
 
   function press(d) {
     setErr('')
@@ -180,8 +198,14 @@ function SellerLogin({ onLogin }) {
             מנהל: קוד <b>1234</b> · מוכר יוסי: קוד <b>1111</b>
           </div>
         )}
+        {fp.ready && hasFp && (
+          <button className="btn primary big" disabled={fpBusy} onClick={fingerLogin}>
+            {fpBusy ? '👆 הנח אצבע על הקורא…' : '👆 כניסה באצבע'}
+          </button>
+        )}
         {!sel ? (
           <>
+            {err && <div className="err">{err}</div>}
             <h3>מי מוכר עכשיו?</h3>
             <div className="seller-list">
               {users.map((u) => (
@@ -638,6 +662,19 @@ function Settings({ user, sync }) {
 function UserEditor({ u, me, onClose }) {
   const [f, setF] = useState({ ...u, perms: { ...(u.perms || {}) } })
   const [pin, setPin] = useState('')
+  const fp = useFingerprint()
+  const [enrolling, setEnrolling] = useState(false)
+  async function enroll() {
+    setEnrolling(true)
+    try {
+      const t = await fpEnroll()
+      setF((x) => ({ ...x, fpTemplates: [...(x.fpTemplates || []), t].slice(-3) }))
+      toast('✓ האצבע נרשמה — לחץ שמור')
+    } catch (e) {
+      toast(e.message || String(e), 'err')
+    }
+    setEnrolling(false)
+  }
   const setPerm = (k) => (v) => setF({ ...f, perms: { ...f.perms, [k]: v } })
   function ok() {
     if (!f.name?.trim()) return toast('חסר שם', 'err')
@@ -679,6 +716,24 @@ function UserEditor({ u, me, onClose }) {
         </>
       )}
       <Toggle checked={f.active !== false} onChange={(v) => setF({ ...f, active: v })} label="פעיל" />
+      <div className="fp-box">
+        <b>👆 טביעת אצבע</b>{' '}
+        <span className="muted small">{f.fpTemplates?.length ? `${f.fpTemplates.length} אצבעות רשומות` : 'לא רשום'}</span>
+        {fp.ready ? (
+          <div className="row gap-s">
+            <button className="btn small primary" disabled={enrolling} onClick={enroll}>
+              {enrolling ? 'הנח את האצבע 3 פעמים…' : '+ רשום אצבע'}
+            </button>
+            {f.fpTemplates?.length > 0 && (
+              <button className="btn small" onClick={() => setF({ ...f, fpTemplates: [] })}>
+                מחק טביעות
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="muted small">קורא טביעות לא מחובר למחשב הזה</div>
+        )}
+      </div>
       <button className="btn primary big grow" onClick={ok}>
         שמור
       </button>

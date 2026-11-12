@@ -1720,3 +1720,11 @@ main {
   padding: 8px 10px;
   font-size: 13px;
 }
+.fp-box {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

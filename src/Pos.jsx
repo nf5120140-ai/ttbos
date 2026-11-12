@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { list, get, balanceOf, stockOf, sell, buildSale, voidSale, unitPrice, deviceId, round2 } from './db.js'
 import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
+import { VerifyStaffModal, staffMethodLabel } from './Staff.jsx'
 import {
   useVersion,
   money,
@@ -23,7 +24,8 @@ export default function Pos({ user }) {
   const [cart, setCart] = useState([]) // [{productId, qty}]
   const [customerId, setCustomerId] = useState(null)
   const [discountPct, setDiscountPct] = useState(0)
-  const [staffOverride, setStaffOverride] = useState(null) // null = לפי הלקוח
+  const [staffAuth, setStaffAuth] = useState(null) // {buyerId, method, approvedBy} — מחיר מוכרים מאומת
+  const [verifyFor, setVerifyFor] = useState(null) // {targetUserId}
   const [cat, setCat] = useState('__top')
   const [q, setQ] = useState('')
   const [picker, setPicker] = useState(false)
@@ -37,7 +39,7 @@ export default function Pos({ user }) {
 
   const products = useMemo(() => list('product').filter((p) => p.active !== false), [v])
   const customer = customerId ? get('customer', customerId) : null
-  const staff = staffOverride ?? !!customer?.isStaff
+  const staff = !!staffAuth
 
   const categories = useMemo(() => [...new Set(products.map((p) => p.category || 'כללי'))].sort(), [products])
 
@@ -87,7 +89,12 @@ export default function Pos({ user }) {
   }
   function selectCustomer(c) {
     setCustomerId(c?.id || null)
-    setStaffOverride(null)
+    setStaffAuth(null)
+    if (c?.isStaff) {
+      // המוכר המחובר קונה לעצמו — כבר מזוהה. אחרת — צריך אימות של הקונה
+      if (c.userId && c.userId === user.id) setStaffAuth({ buyerId: user.id, method: 'self', approvedBy: user.id })
+      else setVerifyFor({ targetUserId: c.userId || null })
+    }
     setDiscountPct(c?.discountPct ? Number(c.discountPct) : 0)
     setPicker(false)
   }
@@ -95,7 +102,7 @@ export default function Pos({ user }) {
     setCart([])
     setCustomerId(null)
     setDiscountPct(0)
-    setStaffOverride(null)
+    setStaffAuth(null)
     setCartOpen(false)
   }
 
@@ -116,10 +123,17 @@ export default function Pos({ user }) {
     toast('לא נמצא ברקוד ' + code, 'err')
     return false
   }
-  useBarcodeScanner(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen)
+  useBarcodeScanner(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen && !verifyFor)
 
   function items() {
-    return lines.map((l) => ({ productId: l.p.id, name: l.p.name, qty: l.qty, price: l.price, cost: Number(l.p.cost) || 0 }))
+    return lines.map((l) => ({
+      productId: l.p.id,
+      name: l.p.name,
+      qty: l.qty,
+      price: l.price,
+      cost: Number(l.p.cost) || 0,
+      ...(staff ? { regularPrice: Number(l.p.price) || 0 } : {}),
+    }))
   }
   function payWallet() {
     if (!customer) return setPicker(true)
@@ -127,23 +141,31 @@ export default function Pos({ user }) {
       toast(`אין מספיק יתרה (${money(balance)})`, 'err')
       return
     }
-    sell({ items: items(), customerId: customer.id, payment: 'wallet', discountPct, sellerId: user.id, staff })
+    sell({ ...saleArgs('wallet') })
     toast(`✓ ${customer.name} — נשארו ${money(balance - total)}`)
     clear()
   }
   function payCash(received) {
-    sell({ items: items(), customerId: customer?.id || null, payment: 'cash', discountPct, sellerId: user.id, staff, received })
+    sell({ ...saleArgs('cash'), received })
     const change = round2((received || total) - total)
     toast(change > 0 ? `✓ שולם. עודף: ${money(change)}` : '✓ שולם במזומן')
     setCashModal(false)
     clear()
   }
 
-  function saleArgs(payment) {
-    return { items: items(), customerId: customer?.id || null, payment, discountPct, sellerId: user.id, staff }
+  function saleArgs(payment, extra = {}) {
+    return {
+      items: items(),
+      customerId: customer?.id || null,
+      payment,
+      discountPct,
+      sellerId: user.id,
+      staff,
+      extra: { ...(staffAuth ? { staffAuth } : {}), ...extra },
+    }
   }
   function payTerminal(t) {
-    sell({ ...saleArgs('terminal'), extra: { terminal: t } })
+    sell(saleArgs('terminal', { terminal: t }))
     toast('✓ נרשם — שולם באשראי במסופון')
     setTerminalOpen(false)
     clear()
@@ -264,8 +286,13 @@ export default function Pos({ user }) {
         <div className="cart-foot">
           <div className="row wrap gap-s">
             <label className="chk">
-              <input type="checkbox" checked={staff} onChange={(e) => setStaffOverride(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={staff}
+                onChange={(e) => (e.target.checked ? setVerifyFor({ targetUserId: customer?.isStaff ? customer.userId || null : null }) : setStaffAuth(null))}
+              />
               מחיר מוכרים
+              {staffAuth && <small className="muted"> ✓ {get('user', staffAuth.buyerId)?.name}</small>}
             </label>
             {can(user, 'discount') && (
               <div className="disc">
@@ -355,6 +382,17 @@ export default function Pos({ user }) {
             clear()
           }}
           onClose={() => setCreditOpen(false)}
+        />
+      )}
+      {verifyFor && (
+        <VerifyStaffModal
+          targetUserId={verifyFor.targetUserId}
+          onOk={(a) => {
+            setStaffAuth(a)
+            setVerifyFor(null)
+            toast('✓ מחיר מוכרים — ' + (get('user', a.buyerId)?.name || ''))
+          }}
+          onCancel={() => setVerifyFor(null)}
         />
       )}
       {terminalOpen && <TerminalModal amount={total} defaultPhone={customer?.phone || ''} onConfirm={payTerminal} onClose={() => setTerminalOpen(false)} />}
@@ -485,7 +523,10 @@ function RecentSales({ user, onClose }) {
                   <small className="muted">{new Date(s.createdAt).toLocaleDateString('he-IL')}</small>
                 </td>
                 <td>{s.items.map((i) => `${i.name}${i.qty > 1 ? ' ×' + i.qty : ''}`).join(', ')}</td>
-                <td>{s.customerId ? get('customer', s.customerId)?.name || '—' : '—'}</td>
+                <td>
+                  {s.customerId ? get('customer', s.customerId)?.name || '—' : '—'}
+                  {s.staffAuth && <small className="tag"> מחיר מוכרים: {users.get(s.staffAuth.buyerId)}</small>}
+                </td>
                 <td>
                   {paymentLabel(s.payment)}
                   {s.payment === 'credit' && !s.verified && <small className="warn"> (ממתין לאישור)</small>}

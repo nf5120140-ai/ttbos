@@ -39,7 +39,7 @@ export function seedDemo() {
     ['דוד רוזנברג', 'שיעור ג', '1005', false],
     ['יוסי (מוכר)', 'צוות מזנון', '2001', true],
   ]
-  const customers = C.map(([name, group, card, isStaff]) => save('customer', { name, group, card, isStaff, discountPct: 0, parentPhone: '', active: true }, { silent: true }))
+  const customers = C.map(([name, group, card, isStaff]) => save('customer', { name, group, card, isStaff, ...(isStaff ? { userId: seller.id } : {}), discountPct: 0, parentPhone: '', active: true }, { silent: true }))
 
   // היסטוריה של 30 יום לדוחות
   const now = Date.now()

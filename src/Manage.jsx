@@ -161,6 +161,20 @@ function CustomerEditor({ c, onClose }) {
         </Field>
       </div>
       <Toggle checked={f.isStaff} onChange={set('isStaff')} label="מוכר במזנון (מקבל מחיר מוכרים)" />
+      {f.isStaff && (
+        <Field label="המשתמש שלו בקופה (לאימות בקוד / באצבע)" hint="כשהוא קונה — יתבקש הקוד האישי שלו">
+          <select value={f.userId || ''} onChange={set('userId')}>
+            <option value="">— לא מקושר (יבחרו בזמן הקנייה) —</option>
+            {list('user')
+              .filter((u) => u.active !== false)
+              .map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+          </select>
+        </Field>
+      )}
       <Toggle checked={f.allowNegative} onChange={set('allowNegative')} label="מותר לרדת למינוס" />
       <Toggle checked={f.active !== false} onChange={(x) => setF({ ...f, active: x })} label="פעיל" />
       <div className="row gap modal-actions">
