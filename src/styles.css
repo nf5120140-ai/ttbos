@@ -1728,3 +1728,102 @@ main {
   flex-direction: column;
   gap: 6px;
 }
+
+/* ---------- מבצעים ---------- */
+.tile-old {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+.promo-flag {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  background: #d64545;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 1px 4px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tile:has(.promo-flag) {
+  padding-bottom: 24px;
+  border-color: #f0c4c4;
+}
+.promo-tag {
+  color: var(--red);
+  font-weight: 700;
+}
+.promo-row {
+  color: var(--red);
+  font-weight: 700;
+}
+.saving {
+  text-align: center;
+  color: var(--green);
+  font-weight: 800;
+  font-size: 14px;
+}
+.promo-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+.promo-card {
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #fff;
+}
+.promo-card.live {
+  border-color: #f0b0b0;
+  background: #fff8f8;
+}
+.promo-type {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--red);
+}
+.promo-preview {
+  background: #fff3d6;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-weight: 700;
+}
+.promo-products {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+}
+.promo-prod {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.promo-prod.on {
+  background: #fff3d6;
+}
+.pl-promo {
+  color: #d64545;
+  font-weight: 800;
+  font-size: 0.8em;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}

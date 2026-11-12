@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { list, getSetting } from './db.js'
 import { money, ProductThumb } from './ui.jsx'
+import { unitPromoFor, bundlesFor, livePromos, promoLabel } from './pricing.js'
 
 const loadPrefs = () => {
   try {
@@ -54,6 +55,7 @@ export function PriceList({ onClose }) {
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], 'he'))
   }, [products, o.mode])
 
+  const promos = useMemo(() => livePromos(), [])
   const hasStaff = products.some((p) => p.staffPrice !== '' && p.staffPrice != null && Number(p.staffPrice) !== Number(p.price))
 
   function doPrint() {
@@ -136,6 +138,16 @@ export function PriceList({ onClose }) {
                       <span className="pl-name">{p.name}</span>
                       <span className="pl-dots" />
                       <span className="pl-price">
+                        {(() => {
+                          const up = unitPromoFor(p, promos)
+                          const b = bundlesFor(p, promos)[0]
+                          return (
+                            <>
+                              {up && <span className="pl-promo">מבצע {money(up.unit)} </span>}
+                              {!up && b && <span className="pl-promo">{promoLabel(b)} · </span>}
+                            </>
+                          )
+                        })()}
                         {money(p.price)}
                         {o.staff && p.staffPrice !== '' && p.staffPrice != null && Number(p.staffPrice) !== Number(p.price) && (
                           <small className="pl-staff"> מוכרים {money(p.staffPrice)}</small>

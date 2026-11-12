@@ -571,7 +571,7 @@ function Settings({ user, sync }) {
         <div className="card">
           <div className="row space">
             <h3>מוכרים ומשתמשים</h3>
-            <button className="btn primary" onClick={() => setEdit({ role: 'seller', active: true, perms: { void: true, topup: true, discount: true, terminal: true, reports: false } })}>
+            <button className="btn primary" onClick={() => setEdit({ role: 'seller', active: true, staffDiscountPct: 0, perms: { void: true, topup: true, terminal: true, reports: false } })}>
               + מוכר
             </button>
           </div>
@@ -583,7 +583,7 @@ function Settings({ user, sync }) {
                   <th>תפקיד</th>
                   <th>ביטול/מחיקה</th>
                   <th>טעינת ארנק</th>
-                  <th>הנחות</th>
+                  <th>הנחת עובד</th>
                   <th>מסופון</th>
                   <th>דוחות</th>
                   <th>פעיל</th>
@@ -597,7 +597,11 @@ function Settings({ user, sync }) {
                       <b>{u.name}</b>
                     </td>
                     <td>{u.role === 'manager' ? 'מנהל' : 'מוכר'}</td>
-                    {['void', 'topup', 'discount', 'terminal', 'reports'].map((p) => (
+                    {['void', 'topup'].map((p) => (
+                      <td key={p}>{can(u, p) ? '✓' : '—'}</td>
+                    ))}
+                    <td>{Number(u.staffDiscountPct) ? u.staffDiscountPct + '%' : '—'}</td>
+                    {['terminal', 'reports'].map((p) => (
                       <td key={p}>{can(u, p) ? '✓' : '—'}</td>
                     ))}
                     <td>{u.active !== false ? '✓' : '—'}</td>
@@ -684,7 +688,7 @@ function UserEditor({ u, me, onClose }) {
     if (u.id === me.id && f.role !== 'manager') return toast('אי אפשר להוריד לעצמך הרשאת מנהל', 'err')
     if (u.role === 'manager' && (f.role !== 'manager' || f.active === false) && list('user').filter((x) => x.role === 'manager' && x.active !== false).length <= 1)
       return toast('חייב להישאר לפחות מנהל אחד', 'err')
-    save('user', { ...f, name: f.name.trim(), ...(pin ? { pinHash: hashPin(pin) } : {}) })
+    save('user', { ...f, name: f.name.trim(), staffDiscountPct: Math.max(0, Math.min(100, Number(f.staffDiscountPct) || 0)), ...(pin ? { pinHash: hashPin(pin) } : {}) })
     toast('נשמר')
     onClose()
   }
@@ -695,6 +699,9 @@ function UserEditor({ u, me, onClose }) {
       </Field>
       <Field label={u.id ? 'קוד חדש (ריק = ללא שינוי)' : 'קוד כניסה (4+ ספרות)'}>
         <input type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />
+      </Field>
+      <Field label="אחוז הנחת עובד (כשהוא קונה לעצמו)" hint="מוצר עם 'מחיר מוכרים' קבוע — יקבל את המחיר הזה במקום האחוז">
+        <input type="number" inputMode="numeric" min="0" max="100" value={f.staffDiscountPct ?? ''} onChange={(e) => setF({ ...f, staffDiscountPct: e.target.value })} placeholder="0" />
       </Field>
       <div className="seg">
         {[
@@ -710,7 +717,6 @@ function UserEditor({ u, me, onClose }) {
         <>
           <Toggle checked={f.perms.void} onChange={setPerm('void')} label="מותר לבטל / למחוק מכירות" />
           <Toggle checked={f.perms.topup} onChange={setPerm('topup')} label="מותר לטעון ארנקים" />
-          <Toggle checked={f.perms.discount} onChange={setPerm('discount')} label="מותר לתת הנחות" />
           <Toggle checked={f.perms.terminal !== false} onChange={setPerm('terminal')} label="מותר לרשום אשראי במסופון" />
           <Toggle checked={f.perms.reports} onChange={setPerm('reports')} label="רואה דוחות" />
         </>

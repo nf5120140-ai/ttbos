@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { list, get, balanceOf, stockOf, sell, buildSale, voidSale, unitPrice, deviceId, round2 } from './db.js'
+import { list, get, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
 import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
 import { VerifyStaffModal, staffMethodLabel } from './Staff.jsx'
+import { priceCart, unitPromoFor, bundlesFor, staffUnit, livePromos, promoLabel } from './pricing.js'
 import {
   useVersion,
   money,
@@ -17,13 +18,11 @@ import {
   Empty,
 } from './ui.jsx'
 
-const DISCOUNTS = [0, 5, 10, 15, 20]
 
 export default function Pos({ user }) {
   const v = useVersion()
   const [cart, setCart] = useState([]) // [{productId, qty}]
   const [customerId, setCustomerId] = useState(null)
-  const [discountPct, setDiscountPct] = useState(0)
   const [staffAuth, setStaffAuth] = useState(null) // {buyerId, method, approvedBy} — מחיר מוכרים מאומת
   const [verifyFor, setVerifyFor] = useState(null) // {targetUserId}
   const [cat, setCat] = useState('__top')
@@ -67,16 +66,18 @@ export default function Pos({ user }) {
     return cat === '__top' && !q ? arr : [...arr].sort((a, b) => a.name.localeCompare(b.name, 'he'))
   }, [products, cat, q, topIds])
 
-  const lines = cart
-    .map((c) => {
-      const p = get('product', c.productId)
-      if (!p) return null
-      return { ...c, p, price: unitPrice(p, staff) }
-    })
-    .filter(Boolean)
-  const subtotal = round2(lines.reduce((s, l) => s + l.qty * l.price, 0))
-  const discount = round2((subtotal * discountPct) / 100)
-  const total = round2(subtotal - discount)
+  // הנחת עובד — לפי ההגדרה של העובד המאומת. הנחה קבועה של בחור — לפי הגדרת הבחור.
+  const staffPct = staffAuth ? Number(get('user', staffAuth.buyerId)?.staffDiscountPct) || 0 : 0
+  const customerPct = Number(customer?.discountPct) || 0
+  const promos = useMemo(() => livePromos(), [v])
+  const priced = priceCart(
+    cart.map((c) => ({ ...c, p: get('product', c.productId) })).filter((l) => l.p),
+    { staff, staffPct, customerPct }
+  )
+  const lines = priced.lines.map((l) => ({ ...l, price: l.unit }))
+  const discountPct = priced.customerPct
+  const total = priced.total
+  const saving = round2(priced.regularTotal - total)
   const itemsCount = lines.reduce((s, l) => s + l.qty, 0)
   const balance = customer ? balanceOf(customer.id) : 0
 
@@ -95,13 +96,11 @@ export default function Pos({ user }) {
       if (c.userId && c.userId === user.id) setStaffAuth({ buyerId: user.id, method: 'self', approvedBy: user.id })
       else setVerifyFor({ targetUserId: c.userId || null })
     }
-    setDiscountPct(c?.discountPct ? Number(c.discountPct) : 0)
     setPicker(false)
   }
   function clear() {
     setCart([])
     setCustomerId(null)
-    setDiscountPct(0)
     setStaffAuth(null)
     setCartOpen(false)
   }
@@ -130,9 +129,11 @@ export default function Pos({ user }) {
       productId: l.p.id,
       name: l.p.name,
       qty: l.qty,
-      price: l.price,
+      price: l.unit,
+      regularPrice: l.regular,
       cost: Number(l.p.cost) || 0,
-      ...(staff ? { regularPrice: Number(l.p.price) || 0 } : {}),
+      ...(l.promoId ? { promoId: l.promoId, promoName: l.promoName } : {}),
+      ...(l.staffApplied ? { staffApplied: true } : {}),
     }))
   }
   function payWallet() {
@@ -160,8 +161,9 @@ export default function Pos({ user }) {
       payment,
       discountPct,
       sellerId: user.id,
-      staff,
-      extra: { ...(staffAuth ? { staffAuth } : {}), ...extra },
+      staff: staff && !priced.staffFallback,
+      promoDiscounts: priced.promoDiscounts.map(({ promoId, name, amount }) => ({ promoId, name, amount })),
+      extra: { ...(staffAuth ? { staffAuth: { ...staffAuth, pct: staffPct } } : {}), ...extra },
     }
   }
   function payTerminal(t) {
@@ -229,7 +231,20 @@ export default function Pos({ user }) {
                   {inCart ? <span className="badge">{inCart}</span> : null}
                   <ProductThumb p={p} size={56} />
                   <span className="tile-name">{p.name}</span>
-                  <span className="tile-price">{money(unitPrice(p, staff))}</span>
+                  {(() => {
+                    const up = unitPromoFor(p, promos)
+                    const su = staff ? staffUnit(p, staffPct) : null
+                    const unit = Math.min(up ? up.unit : Number(p.price), su ?? Infinity)
+                    const bund = bundlesFor(p, promos)
+                    return (
+                      <>
+                        <span className="tile-price">
+                          {unit < Number(p.price) && <s className="tile-old">{money(p.price)}</s>} {money(unit)}
+                        </span>
+                        {(up || bund.length > 0) && <span className="promo-flag">{up ? promoLabel(up.promo) : promoLabel(bund[0])}</span>}
+                      </>
+                    )
+                  })()}
                   {st <= 0 ? <span className="stock-flag out">אזל</span> : st <= (Number(p.minStock) || 0) ? <span className="stock-flag low">{st}</span> : null}
                 </button>
               )
@@ -271,7 +286,11 @@ export default function Pos({ user }) {
               <ProductThumb p={l.p} size={36} />
               <div className="line-name">
                 <b>{l.p.name}</b>
-                <small>{money(l.price)} ליח׳</small>
+                <small>
+                  {l.unit < l.regular && <s className="muted">{money(l.regular)}</s>} {money(l.unit)} ליח׳
+                  {l.promoName && <span className="promo-tag"> 🏷 {l.promoName}</span>}
+                  {l.staffApplied && <span className="promo-tag"> 🔐 עובד</span>}
+                </small>
               </div>
               <div className="qty">
                 <button onClick={() => add(l.p, 1)}>+</button>
@@ -292,35 +311,31 @@ export default function Pos({ user }) {
                 onChange={(e) => (e.target.checked ? setVerifyFor({ targetUserId: customer?.isStaff ? customer.userId || null : null }) : setStaffAuth(null))}
               />
               מחיר מוכרים
-              {staffAuth && <small className="muted"> ✓ {get('user', staffAuth.buyerId)?.name}</small>}
+              {staffAuth && (
+                <small className="muted">
+                  {' '}
+                  ✓ {get('user', staffAuth.buyerId)?.name}
+                  {staffPct ? ` · ${staffPct}%` : ''}
+                </small>
+              )}
             </label>
-            {can(user, 'discount') && (
-              <div className="disc">
-                הנחה:
-                {DISCOUNTS.map((d) => (
-                  <button key={d} className={discountPct === d ? 'on' : ''} onClick={() => setDiscountPct(d)}>
-                    {d}%
-                  </button>
-                ))}
-                <input
-                  className={'disc-in' + (!DISCOUNTS.includes(discountPct) ? ' on' : '')}
-                  type="number"
-                  inputMode="numeric"
-                  placeholder="%"
-                  value={DISCOUNTS.includes(discountPct) ? '' : discountPct}
-                  onChange={(e) => setDiscountPct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
-                />
-              </div>
-            )}
           </div>
-          {discount > 0 && (
-            <div className="sum-row muted">
+          {priced.promoDiscounts.map((d) => (
+            <div className="sum-row promo-row" key={d.promoId}>
               <span>
-                סכום {money(subtotal)} · הנחה {discountPct}%
+                🏷 {d.name}
+                {d.groups > 1 ? ` ×${d.groups}` : ''}
               </span>
-              <span>−{money(discount)}</span>
+              <span>−{money(d.amount)}</span>
+            </div>
+          ))}
+          {priced.customerDiscount > 0 && (
+            <div className="sum-row muted">
+              <span>הנחה קבועה {discountPct}%</span>
+              <span>−{money(priced.customerDiscount)}</span>
             </div>
           )}
+          {saving > 0 && <div className="saving">חסכת {money(saving)} 🎉</div>}
           <div className="sum-row total">
             <span>לתשלום</span>
             <span>{money(total)}</span>
@@ -539,7 +554,7 @@ function RecentSales({ user, onClose }) {
                 </td>
                 <td>
                   <b>{money(s.total)}</b>
-                  {s.discount > 0 && <small className="muted"> ({s.discountPct}%−)</small>}
+                  {s.discount > 0 && <small className="muted"> (הנחה {money(s.discount)})</small>}
                 </td>
                 <td>{users.get(s.sellerId) || '—'}</td>
                 <td>

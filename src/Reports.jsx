@@ -88,8 +88,12 @@ export function Reports({ user }) {
       tops.filter((t) => !['cash', 'credit', 'terminal'].includes(t.method)),
       (t) => t.amount
     )
+    const promoSaving = round2(
+      ok.reduce((a, s) => a + s.items.reduce((b, i) => b + (i.promoId ? i.qty * Math.max(0, (i.regularPrice ?? i.price) - i.price) : 0), 0) + (s.promoDiscounts || []).reduce((b, d) => b + Number(d.amount || 0), 0), 0)
+    )
     const staffSales = ok.filter((s) => s.staff)
-    const staffSaving = round2(staffSales.reduce((a, s) => a + s.items.reduce((b, i) => b + i.qty * Math.max(0, (i.regularPrice ?? i.price) - i.price), 0), 0))
+    const staffItemSaving = (i) => (i.staffApplied || (!i.promoId && i.staffApplied === undefined) ? i.qty * Math.max(0, (i.regularPrice ?? i.price) - i.price) : 0)
+    const staffSaving = round2(staffSales.reduce((a, s) => a + s.items.reduce((b, i) => b + staffItemSaving(i), 0), 0))
     const stale = new Date(Date.now() - 5 * 60000).toISOString()
     const checkPayments = list('payment').filter(
       (p) =>
@@ -173,6 +177,7 @@ export function Reports({ user }) {
       checkPayments,
       staffSales,
       staffSaving,
+      promoSaving,
       discounts,
       profit,
       hasCost: ok.some((s) => s.items.some((i) => i.cost)),
@@ -274,7 +279,8 @@ export function Reports({ user }) {
           value={money(r.topCash + r.topOther + r.topCredit + r.topTerminal)}
           sub={`מזומן ${money(r.topCash)} · אשראי ${money(r.topCredit)}${r.topTerminal ? ' · מסופון ' + money(r.topTerminal) : ''} · אחר ${money(r.topOther)}`}
         />
-        <Kpi label="הנחות" value={money(r.discounts)} />
+        {r.promoSaving > 0 && <Kpi label="🏷 הנחות מבצעים" value={money(r.promoSaving)} />}
+        <Kpi label="הנחות קבועות" value={money(Math.max(0, r.discounts - r.ok.reduce((a, s) => a + (s.promoDiscounts || []).reduce((b, d) => b + Number(d.amount || 0), 0), 0)))} />
         {r.staffSales.length > 0 && <Kpi label="מחיר מוכרים" value={money(r.staffSaving)} sub={`${r.staffSales.length} קניות של מוכרים`} />}
         <Kpi label="ביטולים" value={r.voided.length} sub={money(r.voided.reduce((a, s) => a + s.total, 0))} warn={r.voided.length > 0} />
       </div>
@@ -423,7 +429,7 @@ export function Reports({ user }) {
                   <td className="small">{s.staffAuth ? staffMethodLabel(s.staffAuth.method) : <span className="warn">ללא אימות (גרסה ישנה)</span>}</td>
                   <td>{r.users.get(s.sellerId)}</td>
                   <td>{money(s.total)}</td>
-                  <td>{money(s.items.reduce((b, i) => b + i.qty * Math.max(0, (i.regularPrice ?? i.price) - i.price), 0))}</td>
+                  <td>{money(s.items.reduce((b, i) => b + (i.staffApplied || (!i.promoId && i.staffApplied === undefined) ? i.qty * Math.max(0, (i.regularPrice ?? i.price) - i.price) : 0), 0))}</td>
                 </tr>
               ))}
             </tbody>

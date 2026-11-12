@@ -5,7 +5,7 @@
 // שעובדים בלי אינטרנט במקביל לא דורסים זה את זה.
 // ============================================================
 
-export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice']
+export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice', 'promo']
 
 // מצב הדגמה: ttbos.vercel.app/?demo — נתוני דוגמה, בלי שרת, במסד נפרד שלא נוגע בנתונים האמיתיים
 export const DEMO = (() => {
@@ -303,9 +303,12 @@ export function unitPrice(product, staff) {
 }
 
 /** בונה את כל הרשומות של מכירה (בלי לשמור). items: [{productId, name, qty, price, cost}] */
-export function buildSale({ items, customerId, payment, discountPct, sellerId, staff, received, extra = {} }) {
+export function buildSale({ items, customerId, payment, discountPct, sellerId, staff, received, extra = {}, promoDiscounts = [] }) {
   const subtotal = round2(items.reduce((s, i) => s + i.qty * i.price, 0))
-  const discount = round2((subtotal * (Number(discountPct) || 0)) / 100)
+  const promoTotal = round2(promoDiscounts.reduce((s, d) => s + Number(d.amount || 0), 0))
+  const afterPromo = round2(subtotal - promoTotal)
+  const pctDiscount = round2((afterPromo * (Number(discountPct) || 0)) / 100)
+  const discount = round2(promoTotal + pctDiscount)
   const total = round2(subtotal - discount)
   const saleId = uid()
   const now = nowIso()
@@ -318,6 +321,7 @@ export function buildSale({ items, customerId, payment, discountPct, sellerId, s
         subtotal,
         discountPct: Number(discountPct) || 0,
         discount,
+        promoDiscounts,
         total,
         payment,
         customerId: customerId || null,

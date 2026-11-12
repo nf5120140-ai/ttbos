@@ -3,6 +3,7 @@ import { list, get, save, remove, balanceOf, stockOf, topup, buildTopup, voidTop
 import { CreditModal, TerminalModal, creditStatus } from './Credit.jsx'
 import { InvoiceIntake } from './Invoice.jsx'
 import { PriceList } from './PriceList.jsx'
+import { Promos } from './Promos.jsx'
 import {
   useVersion,
   money,
@@ -405,6 +406,7 @@ export function Inventory({ user }) {
   const [countMode, setCountMode] = useState(false)
   const [invoice, setInvoice] = useState(false)
   const [priceList, setPriceList] = useState(false)
+  const [promos, setPromos] = useState(false)
   const [counts, setCounts] = useState({})
   const products = useMemo(() => list('product'), [v])
   const suppliers = new Map(list('supplier').map((s) => [s.id, s.name]))
@@ -453,6 +455,9 @@ export function Inventory({ user }) {
               📋 ספירת מלאי
             </button>
           )}
+          <button className="btn" onClick={() => setPromos(true)}>
+            🏷 מבצעים
+          </button>
           <button className="btn" onClick={() => setPriceList(true)}>
             🖨 מחירון
           </button>
@@ -542,6 +547,7 @@ export function Inventory({ user }) {
       {recv && <ReceiveModal p={recv} user={user} onClose={() => setRecv(null)} />}
       {invoice && <InvoiceIntake user={user} onClose={() => setInvoice(false)} />}
       {priceList && <PriceList onClose={() => setPriceList(false)} />}
+      {promos && <Promos onClose={() => setPromos(false)} />}
     </div>
   )
 }
@@ -649,7 +655,7 @@ function ProductEditor({ p, user, onClose }) {
         <Field label="מחיר מכירה ₪">
           <input type="number" inputMode="decimal" value={f.price ?? ''} onChange={set('price')} />
         </Field>
-        <Field label="מחיר מוכרים ₪" hint="ריק = אותו מחיר">
+        <Field label="מחיר מוכרים קבוע ₪" hint="ריק = לפי אחוז ההנחה של העובד">
           <input type="number" inputMode="decimal" value={f.staffPrice ?? ''} onChange={set('staffPrice')} />
         </Field>
         <Field label="מחיר עלות ₪" hint={margin != null ? `רווח ${margin}%` : 'לחישוב רווח'}>
