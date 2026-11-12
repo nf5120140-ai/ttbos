@@ -694,6 +694,7 @@ function NedarimSettings({ mode }) {
     const mosad = String(f.mosad || '').replace(/\D/g, '')
     if (mosad && mosad.length !== 7) return toast('מספר מוסד צריך להיות 7 ספרות', 'err')
     if (f.apiValid && /^npk_/i.test(f.apiValid)) return toast('זה המפתח הסודי (ApiPassword)! צריך את "טקסט האימות" ApiValid', 'err')
+    if (f.testMode && !getSetting('general').email) return toast('במצב בדיקה נדרים מחייבים מייל — מלא מייל ב"פרטי המזנון" ושמור', 'err')
     setSetting('nedarim', { ...f, mosad, apiValid: String(f.apiValid || '').trim(), minTopup: Number(f.minTopup) || 0 })
     toast('נשמר')
   }
@@ -722,6 +723,13 @@ function NedarimSettings({ mode }) {
               <input value={f.title || ''} onChange={set('title')} />
             </Field>
           </div>
+          <Toggle checked={!!f.testMode} onChange={set('testMode')} label="🧪 מצב בדיקה (מוסד הבדיקות של נדרים — לא מחייב באמת)" />
+          {f.testMode && (
+            <p className="test-note small">
+              במצב בדיקה עובדים רק כרטיסי טסט, למשל <span dir="ltr">4557430402321333</span>, תוקף <span dir="ltr">05/31</span>, CVV <span dir="ltr">098</span>.
+              הטעינות והמכירות כן נרשמות בתתבוס — אחרי הבדיקה בטל אותן. לכבות לפני עבודה אמיתית!
+            </p>
+          )}
           <Toggle checked={f.enabled !== false} onChange={set('enabled')} label="אשראי פעיל בקופה" />
           <Toggle checked={f.parentLinks !== false} onChange={set('parentLinks')} label="אפשר קישורי טעינה להורים" />
           <details>
@@ -729,7 +737,7 @@ function NedarimSettings({ mode }) {
             <code className="small" dir="ltr" style={{ wordBreak: 'break-all' }}>
               {nedarimFnUrl}?cb=1
             </code>
-            <p className="muted small">הכתובת נשלחת אוטומטית עם כל עסקה — אין צורך להגדיר אותה בנדרים.</p>
+            <p className="muted small">הכתובת נשלחת אוטומטית עם כל עסקה — אין צורך להגדיר אותה בנדרים. מומלץ להפעיל בנדרים "חתימת HMAC" ולשמור את המפתח בסוד NEDARIM_WEBHOOK_SECRET ב-Supabase.</p>
           </details>
           <button className="btn primary" onClick={saveIt}>
             שמור
@@ -760,6 +768,9 @@ function GeneralSettings() {
         </Field>
         <Field label="כתובת למשלוח">
           <input value={f.address || ''} onChange={set('address')} />
+        </Field>
+        <Field label="מייל (התראות על תקלות תשלום)">
+          <input value={f.email || ''} onChange={set('email')} type="email" dir="ltr" />
         </Field>
       </div>
       <button

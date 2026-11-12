@@ -1713,3 +1713,10 @@ main {
     min-height: auto;
   }
 }
+.test-note {
+  background: #fff3d6;
+  border: 1px dashed #e0b44c;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+}

@@ -14,10 +14,10 @@ export function creditStatus() {
   const s = getSetting('nedarim')
   if (DEMO) return { ok: false, why: 'לא זמין במצב הדגמה' }
   if (!cloudConfigured) return { ok: false, why: 'צריך חיבור לשרת' }
-  if (!s.mosad || !s.apiValid) return { ok: false, why: 'מנהל צריך להגדיר את נדרים פלוס בהגדרות' }
+  if (!s.testMode && (!s.mosad || !s.apiValid)) return { ok: false, why: 'מנהל צריך להגדיר את נדרים פלוס בהגדרות' }
   if (s.enabled === false) return { ok: false, why: 'אשראי כבוי בהגדרות' }
   if (!navigator.onLine) return { ok: false, why: 'אין אינטרנט' }
-  return { ok: true, mosad: String(s.mosad), apiValid: String(s.apiValid), minTopup: Number(s.minTopup || 0) }
+  return { ok: true, test: !!s.testMode, minTopup: Number(s.minTopup || 0) }
 }
 
 /**
@@ -25,7 +25,7 @@ export function creditStatus() {
  * prepare() — נקרא בלחיצה על "חייב", מחזיר {paymentId}. רק אחרי שהתשלום הממתין שמור בשרת.
  * onDone(resp, paymentId) — העסקה עברה.
  */
-export function NedarimFrame({ mosad, apiValid, amount, comment = '', prepare, onDone, onFail, askPayer = true, payButtonText }) {
+export function NedarimFrame({ amount, test = false, prepare, onDone, onFail, askPayer = true, payButtonText }) {
   const frame = useRef(null)
   const pending = useRef(null) // paymentId של העסקה שבתהליך
   const cbs = useRef({})
@@ -76,36 +76,11 @@ export function NedarimFrame({ mosad, apiValid, amount, comment = '', prepare, o
     setErr('')
     setPhase('paying')
     try {
-      const { paymentId } = await prepare({ name: name.trim(), phone: phone.replace(/\D/g, '') })
+      // השרת מקים את העסקה בנדרים (הסכום ננעל שם) ומחזיר מזהה — לאייפרם נשלח רק המזהה
+      const { paymentId, txId } = await prepare({ name: name.trim(), phone: phone.replace(/\D/g, '') })
+      if (!txId) throw new Error('לא התקבל מזהה עסקה מהשרת')
       pending.current = paymentId
-      post({
-        Name: 'FinishTransaction2',
-        Value: {
-          Mosad: mosad,
-          ApiValid: apiValid,
-          PaymentType: 'Ragil',
-          Currency: '1',
-          Zeout: '',
-          FirstName: name.trim().slice(0, 50),
-          LastName: '',
-          Street: '',
-          City: '',
-          Phone: phone.replace(/\D/g, '').slice(0, 20),
-          Mail: '',
-          Amount: String(round2(amount)),
-          Tashlumim: '1',
-          Day: '',
-          Groupe: 'מזנון',
-          Comment: (`tt:${paymentId} ` + comment).slice(0, 300),
-          Param1: paymentId,
-          Param2: paymentId,
-          ForceUpdateMatching: '',
-          ThirdPartyReceipt: '',
-          CallBack: nedarimFnUrl ? nedarimFnUrl + '?cb=1' : '',
-          CallBackMailError: '',
-          Tokef: '',
-        },
-      })
+      post({ Name: 'FinishTransaction', Value: txId })
     } catch (e) {
       pending.current = null
       setErr(e.message || String(e))
@@ -119,6 +94,11 @@ export function NedarimFrame({ mosad, apiValid, amount, comment = '', prepare, o
         <div className="row gap-s">
           <input placeholder="שם בעל הכרטיס (לא חובה)" value={name} onChange={(e) => setName(e.target.value)} />
           <input placeholder="טלפון (לא חובה)" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+        </div>
+      )}
+      {test && (
+        <div className="test-note">
+          🧪 <b>מצב בדיקה</b> — לא מחייב באמת. כרטיס לדוגמה: <span dir="ltr">4557 4304 0232 1333</span> · תוקף <span dir="ltr">05/31</span> · CVV <span dir="ltr">098</span>
         </div>
       )}
       {phase === 'loading' && <div className="muted center">טוען טופס תשלום מאובטח…</div>}
@@ -161,14 +141,15 @@ export function CreditModal({ title, amount, purpose, buildOps, customerId, user
     return () => clearInterval(t)
   }, [done])
 
-  async function prepare() {
+  async function prepare({ name, phone }) {
     if (!navigator.onLine) throw new Error('אין אינטרנט')
     const ops = buildOps()
-    const rec = createPendingPayment({ purpose, amount, ops, customerId, userId: user?.id })
+    const rec = createPendingPayment({ purpose, amount, ops, customerId, userId: user?.id, comment })
     const ok = await flushNow(8000)
     if (!ok) throw new Error('אין חיבור לשרת — נסה שוב' + (syncStatus.error ? ` (${syncStatus.error})` : ''))
     setPaymentId(rec.id)
-    return { paymentId: rec.id }
+    const r = await callPublicFn('nedarim', { action: 'create_tx', paymentId: rec.id, payerName: name, phone })
+    return { paymentId: rec.id, txId: r.txId }
   }
 
   if (!cs.ok)
@@ -183,10 +164,8 @@ export function CreditModal({ title, amount, purpose, buildOps, customerId, user
       <div className="pay-amount">{money(amount)}</div>
       {!done ? (
         <NedarimFrame
-          mosad={cs.mosad}
-          apiValid={cs.apiValid}
           amount={amount}
-          comment={comment}
+          test={cs.test}
           prepare={prepare}
           onDone={(resp, pid) => {
             commitPaymentClientSide(pid, resp)
@@ -323,14 +302,12 @@ export function ParentTopup({ customerId }) {
               <>
                 <div className="pay-amount">{money(a)}</div>
                 <NedarimFrame
-                  mosad={info.mosad}
-                  apiValid={info.apiValid}
                   amount={a}
-                  comment={'טעינת ארנק ' + info.name}
-                  prepare={async ({ name }) => {
-                    const r = await callPublicFn('nedarim', { action: 'create', customerId, amount: a, payerName: name })
+                  test={info.test}
+                  prepare={async ({ name, phone }) => {
+                    const r = await callPublicFn('nedarim', { action: 'create', customerId, amount: a, payerName: name, phone })
                     setPaymentId(r.paymentId)
-                    return { paymentId: r.paymentId }
+                    return { paymentId: r.paymentId, txId: r.txId }
                   }}
                   onDone={() => setStep('done')}
                 />

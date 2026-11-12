@@ -472,9 +472,10 @@ export function setSetting(id, values) {
 
 // ---------- תשלום אשראי (נדרים פלוס) ----------
 /** יוצר רשומת תשלום ממתין. ops = הרשומות שייכתבו כשהתשלום יאושר */
-export function createPendingPayment({ purpose, amount, ops, customerId, userId }) {
+export function createPendingPayment({ purpose, amount, ops, customerId, userId, comment = '' }) {
   return save('payment', {
     purpose,
+    comment: String(comment).slice(0, 120),
     amount: round2(amount),
     ops,
     customerId: customerId || null,
