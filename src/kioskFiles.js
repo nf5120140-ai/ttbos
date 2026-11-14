@@ -90,6 +90,61 @@ echo (The register data in %LOCALAPPDATA%\\TatbusKiosk was kept.)
 pause
 `)
 
+// ---- נעילת Windows למשתמש הקופה (מדיניות למשתמש הנוכחי בלבד) ----
+const POL_EXP = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer'
+const POL_SYS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'
+const lockBat = crlf(`@echo off
+REM ============================================================
+REM  Lock Windows for THIS user only (the register user, e.g. "Kupa").
+REM  Run while signed in as that user. Then sign out and sign in again.
+REM  - Windows-key shortcuts off (Win+R, Win+E, Win+X ...)
+REM  - Only Chrome / the register launcher can be started
+REM  - No Task Manager, no Registry editor, no Settings / Control Panel
+REM  - No right-click on taskbar / desktop
+REM  Undo: run unlock-kiosk.bat as the same user (keep it on a USB stick!)
+REM ============================================================
+set E=${POL_EXP}
+set S=${POL_SYS}
+reg add "%E%" /v NoWinKeys /t REG_DWORD /d 1 /f >nul || goto fail
+reg add "%E%" /v NoRun /t REG_DWORD /d 1 /f >nul
+reg add "%E%" /v NoControlPanel /t REG_DWORD /d 1 /f >nul
+reg add "%E%" /v NoViewContextMenu /t REG_DWORD /d 1 /f >nul
+reg add "%E%" /v NoTrayContextMenu /t REG_DWORD /d 1 /f >nul
+reg add "%E%" /v NoFind /t REG_DWORD /d 1 /f >nul
+reg add "%E%" /v NoStartMenuMorePrograms /t REG_DWORD /d 1 /f >nul
+reg add "%E%" /v RestrictRun /t REG_DWORD /d 1 /f >nul
+reg add "%E%\\RestrictRun" /v 1 /t REG_SZ /d chrome.exe /f >nul
+reg add "%E%\\RestrictRun" /v 2 /t REG_SZ /d wscript.exe /f >nul
+reg add "%E%\\RestrictRun" /v 3 /t REG_SZ /d cmd.exe /f >nul
+reg add "%S%" /v DisableTaskMgr /t REG_DWORD /d 1 /f >nul
+reg add "%S%" /v DisableRegistryTools /t REG_DWORD /d 1 /f >nul
+reg add "%S%" /v DisableLockWorkstation /t REG_DWORD /d 1 /f >nul
+reg add "%S%" /v DisableChangePassword /t REG_DWORD /d 1 /f >nul
+echo.
+echo  Locked. Sign out and sign in again for the lock to take effect.
+echo  IMPORTANT: copy unlock-kiosk.bat to a USB stick and DELETE it from this computer.
+echo.
+pause
+exit /b 0
+:fail
+echo.
+echo  Could not write the lock settings for this user.
+echo  Run this file while signed in as the register user (not as admin "Run as").
+pause
+exit /b 1
+`)
+
+const unlockBat = crlf(`@echo off
+REM Removes the Windows lock for THIS user. Then sign out and sign in.
+set E=${POL_EXP}
+set S=${POL_SYS}
+for %%V in (NoWinKeys NoRun NoControlPanel NoViewContextMenu NoTrayContextMenu NoFind NoStartMenuMorePrograms RestrictRun) do reg delete "%E%" /v %%V /f >nul 2>&1
+reg delete "%E%\\RestrictRun" /f >nul 2>&1
+for %%V in (DisableTaskMgr DisableRegistryTools DisableLockWorkstation DisableChangePassword) do reg delete "%S%" /v %%V /f >nul 2>&1
+echo Unlocked. Sign out and sign in again.
+pause
+`)
+
 const readme = crlf(`TATBUS - LOCKED REGISTER FOR WINDOWS
 ====================================
 1. Create a separate standard Windows user for the register (e.g. "Kupa").
@@ -98,9 +153,16 @@ const readme = crlf(`TATBUS - LOCKED REGISTER FOR WINDOWS
 4. Double-click install-kiosk.bat
    The register opens full screen. Log in once with the canteen email.
 
+5. (Recommended) Double-click lock-kiosk.bat, then sign out and in.
+   This blocks the Windows key, Task Manager, Settings and all programs
+   except the register - for this user only.
+   Copy unlock-kiosk.bat to a USB stick and delete it from the computer.
+
 Manager exit:     Ctrl+Shift+Q inside the register + manager PIN
 Reopen register:  double-click "Tatbus" on the desktop
-Remove:           run uninstall-kiosk.bat (as the register user)
+Unlock Windows:   run unlock-kiosk.bat from the USB stick (as the register user)
+Remove:           unlock first, then run uninstall-kiosk.bat (as the register user)
+Emergency:        sign in with your admin user - nothing is locked there.
 `)
 
 // ---------- כתיבת ZIP פשוט (ללא דחיסה) ----------
@@ -177,6 +239,8 @@ export function kioskFiles(origin = location.origin) {
     { name: 'tatbus-kiosk.bat', data: launcherBat(url) },
     { name: 'tatbus-start.vbs', data: hiddenVbs },
     { name: 'uninstall-kiosk.bat', data: uninstallBat },
+    { name: 'lock-kiosk.bat', data: lockBat },
+    { name: 'unlock-kiosk.bat', data: unlockBat },
     { name: 'README.txt', data: readme },
   ]
 }

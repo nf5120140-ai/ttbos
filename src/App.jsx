@@ -922,13 +922,17 @@ function KioskSettings() {
           <li>מורידים את קבצי ההתקנה (כפתור למטה), מחלצים את כל הקבצים לתיקייה אחת.</li>
           <li>לוחצים פעמיים על <b>install-kiosk.bat</b> — הקופה נפתחת במסך מלא, ומעכשיו נפתחת לבד בכל כניסה.</li>
           <li>נכנסים פעם אחת עם המייל והסיסמה של המזנון.</li>
+          <li>
+            <b>נעילת Windows:</b> לוחצים על <b>lock-kiosk.bat</b>, ואז מתנתקים ונכנסים שוב. זה חוסם את מקש Windows, מנהל המשימות, ההגדרות וכל תוכנה אחרת — רק אצל משתמש הקופה.
+            את <b>unlock-kiosk.bat</b> מעבירים לדיסק-און-קי ומוחקים מהמחשב.
+          </li>
         </ol>
         <div className="row gap-s wrap">
           <button className="btn primary" onClick={downloadKioskZip}>
             ⬇ הורד קבצי התקנה לקופה
           </button>
           <span className="muted small">
-            יציאה: <b>Ctrl+Shift+Q</b> + קוד מנהל · חזרה: אייקון <b>Tatbus</b> בשולחן העבודה · הסרה: uninstall-kiosk.bat
+            יציאה: <b>Ctrl+Shift+Q</b> + קוד מנהל · חזרה: אייקון <b>Tatbus</b> בשולחן העבודה · ביטול נעילה: unlock-kiosk.bat מהדיסק-און-קי
           </span>
         </div>
       </div>
