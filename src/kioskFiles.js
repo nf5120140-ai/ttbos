@@ -90,60 +90,106 @@ echo (The register data in %LOCALAPPDATA%\\TatbusKiosk was kept.)
 pause
 `)
 
-// ---- נעילת Windows למשתמש הקופה (מדיניות למשתמש הנוכחי בלבד) ----
-const POL_EXP = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer'
-const POL_SYS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'
-const lockBat = crlf(`@echo off
-REM ============================================================
-REM  Lock Windows for THIS user only (the register user, e.g. "Kupa").
-REM  Run while signed in as that user. Then sign out and sign in again.
-REM  - Windows-key shortcuts off (Win+R, Win+E, Win+X ...)
-REM  - Only Chrome / the register launcher can be started
-REM  - No Task Manager, no Registry editor, no Settings / Control Panel
-REM  - No right-click on taskbar / desktop
-REM  Undo: run unlock-kiosk.bat as the same user (keep it on a USB stick!)
-REM ============================================================
-set E=${POL_EXP}
-set S=${POL_SYS}
-reg add "%E%" /v NoWinKeys /t REG_DWORD /d 1 /f >nul || goto fail
-reg add "%E%" /v NoRun /t REG_DWORD /d 1 /f >nul
-reg add "%E%" /v NoControlPanel /t REG_DWORD /d 1 /f >nul
-reg add "%E%" /v NoViewContextMenu /t REG_DWORD /d 1 /f >nul
-reg add "%E%" /v NoTrayContextMenu /t REG_DWORD /d 1 /f >nul
-reg add "%E%" /v NoFind /t REG_DWORD /d 1 /f >nul
-reg add "%E%" /v NoStartMenuMorePrograms /t REG_DWORD /d 1 /f >nul
-reg add "%E%" /v RestrictRun /t REG_DWORD /d 1 /f >nul
-reg add "%E%\\RestrictRun" /v 1 /t REG_SZ /d chrome.exe /f >nul
-reg add "%E%\\RestrictRun" /v 2 /t REG_SZ /d wscript.exe /f >nul
-reg add "%E%\\RestrictRun" /v 3 /t REG_SZ /d cmd.exe /f >nul
-reg add "%S%" /v DisableTaskMgr /t REG_DWORD /d 1 /f >nul
-reg add "%S%" /v DisableRegistryTools /t REG_DWORD /d 1 /f >nul
-reg add "%S%" /v DisableLockWorkstation /t REG_DWORD /d 1 /f >nul
-reg add "%S%" /v DisableChangePassword /t REG_DWORD /d 1 /f >nul
-echo.
-echo  Locked. Sign out and sign in again for the lock to take effect.
-echo  IMPORTANT: copy unlock-kiosk.bat to a USB stick and DELETE it from this computer.
-echo.
-pause
-exit /b 0
-:fail
-echo.
-echo  Could not write the lock settings for this user.
-echo  Run this file while signed in as the register user (not as admin "Run as").
-pause
-exit /b 1
+// ---- נעילת Windows למשתמש הקופה ----
+// משתמש רגיל לא יכול לכתוב הגדרות מדיניות, לכן הקובץ מבקש הרשאת מנהל (UAC)
+// וכותב את ההגדרות ישירות לפרופיל של משתמש הקופה (לא של המנהל).
+const lockPs1 = crlf(String.raw`param([switch]$Unlock)
+$ErrorActionPreference = 'Continue'
+
+function Test-Admin($sid) {
+  try {
+    foreach ($m in (Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop)) { if ($m.SID.Value -eq $sid) { return $true } }
+    return $false
+  } catch {
+    try {
+      $g = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+      foreach ($m in ([ADSI]"WinNT://$env:COMPUTERNAME/$g,group").psbase.Invoke('Members')) {
+        $bytes = $m.GetType().InvokeMember('objectSid', 'GetProperty', $null, $m, $null)
+        if ((New-Object System.Security.Principal.SecurityIdentifier($bytes, 0)).Value -eq $sid) { return $true }
+      }
+      return $false
+    } catch { return $true }  # if we can't tell - treat as admin (safe side)
+  }
+}
+
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$list = @()
+foreach ($p in (Get-CimInstance Win32_UserProfile | Where-Object { -not $_.Special -and $_.SID -like 'S-1-5-21-*' })) {
+  try { $n = (New-Object System.Security.Principal.SecurityIdentifier($p.SID)).Translate([System.Security.Principal.NTAccount]).Value } catch { $n = $p.LocalPath }
+  $adm = (Test-Admin $p.SID) -or ($p.SID -eq $me)
+  $list += [pscustomobject]@{ Name = $n; Sid = $p.SID; Path = $p.LocalPath; Admin = $adm }
+}
+
+Write-Host ''
+Write-Host 'Users on this computer:'
+for ($i = 0; $i -lt $list.Count; $i++) {
+  $tag = ''; if ($list[$i].Admin -and -not $Unlock) { $tag = '   (ADMIN - will NOT be locked)' }
+  Write-Host ("  " + ($i + 1) + ") " + $list[$i].Name + $tag)
+}
+if ($Unlock) { Write-Host '  0) ALL users' }
+
+$c = Read-Host ('Type the number of the REGISTER user to ' + $(if ($Unlock) { 'UNLOCK' } else { 'LOCK' }) + ' and press Enter')
+if ($Unlock -and $c -eq '0') { $sel = $list }
+else {
+  $k = 0
+  if (-not [int]::TryParse($c, [ref]$k) -or $k -lt 1 -or $k -gt $list.Count) { Write-Host 'Wrong number. Nothing was changed.' -ForegroundColor Red; exit 1 }
+  $sel = @($list[$k - 1])
+}
+
+if (-not $Unlock) {
+  $u = $sel[0]
+  if ($u.Admin) {
+    Write-Host ''
+    Write-Host ("'" + $u.Name + "' is an ADMIN user. It will NOT be locked.") -ForegroundColor Red
+    Write-Host 'Create a separate STANDARD user for the register, sign in to it once, and run this again.'
+    exit 1
+  }
+  $ok = Read-Host ("Lock '" + $u.Name + "'? Type YES")
+  if ($ok -ne 'YES') { Write-Host 'Cancelled. Nothing was changed.'; exit 1 }
+}
+
+$expVals = 'NoWinKeys','NoRun','NoControlPanel','NoViewContextMenu','NoTrayContextMenu','NoFind','NoStartMenuMorePrograms','RestrictRun'
+$sysVals = 'DisableTaskMgr','DisableRegistryTools','DisableLockWorkstation','DisableChangePassword'
+foreach ($u in $sel) {
+  $root = "Registry::HKEY_USERS\$($u.Sid)"
+  $loaded = $false
+  if (-not (Test-Path $root)) { & reg.exe load "HKU\$($u.Sid)" "$($u.Path)\NTUSER.DAT" | Out-Null; $loaded = $true }
+  $exp = "$root\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+  $sys = "$root\Software\Microsoft\Windows\CurrentVersion\Policies\System"
+  if ($Unlock) {
+    foreach ($v in $expVals) { Remove-ItemProperty -Path $exp -Name $v -ErrorAction SilentlyContinue }
+    Remove-Item -Path "$exp\RestrictRun" -Recurse -ErrorAction SilentlyContinue
+    foreach ($v in $sysVals) { Remove-ItemProperty -Path $sys -Name $v -ErrorAction SilentlyContinue }
+    Write-Host ("UNLOCKED: " + $u.Name) -ForegroundColor Green
+  } else {
+    New-Item -Path $exp -Force | Out-Null
+    New-Item -Path $sys -Force | Out-Null
+    foreach ($v in $expVals) { New-ItemProperty -Path $exp -Name $v -Value 1 -PropertyType DWord -Force | Out-Null }
+    New-Item -Path "$exp\RestrictRun" -Force | Out-Null
+    $i = 1
+    foreach ($app in 'chrome.exe','wscript.exe','cmd.exe') { New-ItemProperty -Path "$exp\RestrictRun" -Name "$i" -Value $app -PropertyType String -Force | Out-Null; $i++ }
+    foreach ($v in $sysVals) { New-ItemProperty -Path $sys -Name $v -Value 1 -PropertyType DWord -Force | Out-Null }
+    Write-Host ("LOCKED: " + $u.Name) -ForegroundColor Green
+    Write-Host 'Copy unlock-kiosk.bat + kiosk-lock.ps1 to a USB stick.'
+  }
+  if ($loaded) { [gc]::Collect(); Start-Sleep 1; & reg.exe unload "HKU\$($u.Sid)" | Out-Null }
+}
+Write-Host 'Sign out and sign in again with that user.'
 `)
 
-const unlockBat = crlf(`@echo off
-REM Removes the Windows lock for THIS user. Then sign out and sign in.
-set E=${POL_EXP}
-set S=${POL_SYS}
-for %%V in (NoWinKeys NoRun NoControlPanel NoViewContextMenu NoTrayContextMenu NoFind NoStartMenuMorePrograms RestrictRun) do reg delete "%E%" /v %%V /f >nul 2>&1
-reg delete "%E%\\RestrictRun" /f >nul 2>&1
-for %%V in (DisableTaskMgr DisableRegistryTools DisableLockWorkstation DisableChangePassword) do reg delete "%S%" /v %%V /f >nul 2>&1
-echo Unlocked. Sign out and sign in again.
+const elevateBat = (arg) =>
+  crlf(`@echo off
+REM Needs an administrator password (Windows will ask). You pick the user from a list.
+net session >nul 2>&1
+if errorlevel 1 (
+  powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kiosk-lock.ps1" ${arg}
 pause
 `)
+const lockBat = elevateBat('')
+const unlockBat = elevateBat('-Unlock')
 
 const readme = crlf(`TATBUS - LOCKED REGISTER FOR WINDOWS
 ====================================
@@ -153,14 +199,17 @@ const readme = crlf(`TATBUS - LOCKED REGISTER FOR WINDOWS
 4. Double-click install-kiosk.bat
    The register opens full screen. Log in once with the canteen email.
 
-5. (Recommended) Double-click lock-kiosk.bat, then sign out and in.
+5. (Recommended) Double-click lock-kiosk.bat. Windows asks for an ADMIN
+   password - type it. Pick the REGISTER user from the list (admin users
+   are never locked), type YES. Then sign out and sign in again.
    This blocks the Windows key, Task Manager, Settings and all programs
    except the register - for this user only.
-   Copy unlock-kiosk.bat to a USB stick and delete it from the computer.
+   Copy unlock-kiosk.bat + kiosk-lock.ps1 to a USB stick and delete
+   unlock-kiosk.bat from the computer.
 
 Manager exit:     Ctrl+Shift+Q inside the register + manager PIN
 Reopen register:  double-click "Tatbus" on the desktop
-Unlock Windows:   run unlock-kiosk.bat from the USB stick (as the register user)
+Unlock Windows:   run unlock-kiosk.bat from the USB stick, pick the user (0 = all)
 Remove:           unlock first, then run uninstall-kiosk.bat (as the register user)
 Emergency:        sign in with your admin user - nothing is locked there.
 `)
@@ -240,6 +289,7 @@ export function kioskFiles(origin = location.origin) {
     { name: 'tatbus-start.vbs', data: hiddenVbs },
     { name: 'uninstall-kiosk.bat', data: uninstallBat },
     { name: 'lock-kiosk.bat', data: lockBat },
+    { name: 'kiosk-lock.ps1', data: lockPs1 },
     { name: 'unlock-kiosk.bat', data: unlockBat },
     { name: 'README.txt', data: readme },
   ]
