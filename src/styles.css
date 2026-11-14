@@ -1874,3 +1874,13 @@ tr.imp-skip td {
 .kiosk-badge {
   font-size: 14px;
 }
+.kiosk-install {
+  background: #f7f4ec;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.kiosk-install ol {
+  margin: 6px 0;
+  padding-inline-start: 20px;
+  line-height: 1.7;
+}

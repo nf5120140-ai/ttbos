@@ -3,7 +3,8 @@ import { DEMO, initDb, list, getSetting, setSetting, get, save, saveMany, hashPi
 import { startSync, syncNow, cloudConfigured, cloudLogin, cloudSignup, cloudResetPassword, cloudSetPassword, cloudLogout, setCloudConfig, nedarimFnUrl } from './sync.js'
 import { ParentTopup } from './Credit.jsx'
 import { useFingerprint, fpIdentify, fpEnroll } from './fp.js'
-import { isKioskDevice, startKioskMode, setKioskSeller, useKioskAlerts, kioskStatus, askNotifyPermission, setKioskDevice, STALE_MIN } from './kiosk.js'
+import { downloadKioskZip } from './kioskFiles.js'
+import { managerExit, isKioskDevice, startKioskMode, setKioskSeller, useKioskAlerts, kioskStatus, askNotifyPermission, setKioskDevice, STALE_MIN } from './kiosk.js'
 import { seedDemo } from './seed.js'
 import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime } from './ui.jsx'
 import Pos from './Pos.jsx'
@@ -30,6 +31,19 @@ function KioskApp() {
   const sync = useSyncStatus()
   useVersion()
   const kiosk = useKioskAlerts(ready && user?.role === 'manager')
+  const [exitAsk, setExitAsk] = useState(false)
+  // קופה נעולה: Ctrl+Shift+Q → יציאה באישור מנהל
+  useEffect(() => {
+    if (!isKioskDevice) return
+    const h = (e) => {
+      if (e.ctrlKey && e.shiftKey && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q' || e.key === '/')) {
+        e.preventDefault()
+        setExitAsk(true)
+      }
+    }
+    window.addEventListener('keydown', h, true)
+    return () => window.removeEventListener('keydown', h, true)
+  }, [])
   useEffect(() => setKioskSeller(user?.name || ''), [user])
 
   useEffect(() => {
@@ -60,6 +74,7 @@ function KioskApp() {
     }
   }, [user])
 
+  if (exitAsk) return <ManagerExit onCancel={() => setExitAsk(false)} />
   if (!ready) return <div className="splash">תתבוס…</div>
 
   // ענן מוגדר אבל המכשיר לא מחובר — חיבור חד-פעמי למכשיר
@@ -898,8 +913,25 @@ function KioskSettings() {
     <div className="card">
       <h3>🖥 קופות נעולות — התראות</h3>
       <p className="muted small">
-        מחשב שנפתח מקובץ ההפעלה של הקופה מדווח כל דקה. אם הוא נסגר או מפסיק לדווח יותר מ-{STALE_MIN} דקות — תקפוץ כאן התראה למנהל (בכל מכשיר שבו מנהל מחובר).
+        מחשב שנפתח מקובץ ההפעלה של הקופה מדווח כל דקה. יציאה מורשית: <b>Ctrl+Shift+Q</b> בקופה + קוד מנהל. אם הוא נסגר או מפסיק לדווח יותר מ-{STALE_MIN} דקות — תקפוץ כאן התראה למנהל (בכל מכשיר שבו מנהל מחובר).
       </p>
+      <div className="kiosk-install">
+        <b>🖥 התקנת קופה נעולה במחשב Windows</b>
+        <ol className="small">
+          <li>במחשב הקופה יוצרים משתמש Windows רגיל (לא מנהל), למשל "Kupa", ונכנסים אליו. מוודאים ש-Google Chrome מותקן.</li>
+          <li>מורידים את קבצי ההתקנה (כפתור למטה), מחלצים את כל הקבצים לתיקייה אחת.</li>
+          <li>לוחצים פעמיים על <b>install-kiosk.bat</b> — הקופה נפתחת במסך מלא, ומעכשיו נפתחת לבד בכל כניסה (ברקע, בלי חלון שחור).</li>
+          <li>נכנסים פעם אחת עם המייל והסיסמה של המזנון.</li>
+        </ol>
+        <div className="row gap-s wrap">
+          <button className="btn primary" onClick={downloadKioskZip}>
+            ⬇ הורד קבצי התקנה לקופה
+          </button>
+          <span className="muted small">
+            יציאה: <b>Ctrl+Shift+Q</b> + קוד מנהל · חזרה: אייקון <b>Tatbus</b> בשולחן העבודה · הסרה: uninstall-kiosk.bat
+          </span>
+        </div>
+      </div>
       <div className="row gap-s wrap">
         <span>המחשב הזה: {isKioskDevice ? <b>🔒 קופה נעולה</b> : 'מחשב רגיל'}</span>
         <button className="btn small" onClick={() => setKioskDevice(!isKioskDevice)}>
@@ -956,12 +988,97 @@ function KioskSettings() {
             <div key={e.id} className="row space small">
               <span>{new Date(e.createdAt).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
               <span>{e.deviceName}</span>
-              <span className={e.type === 'closed' ? 'neg' : 'pos-bal'}>{e.type === 'closed' ? 'נסגרה' : 'נפתחה'}</span>
+              <span className={e.type === 'closed' ? 'neg' : e.type === 'exit_manager' ? 'warn' : 'pos-bal'}>
+                {e.type === 'closed' ? 'נסגרה' : e.type === 'exit_manager' ? '🔓 יציאה באישור מנהל' : 'נפתחה'}
+              </span>
               <span className="muted">{e.seller}</span>
             </div>
           ))}
         </details>
       )}
+    </div>
+  )
+}
+
+function ManagerExit({ onCancel }) {
+  const managers = list('user').filter((u) => u.role === 'manager' && u.active !== false)
+  const [sel, setSel] = useState(managers.length === 1 ? managers[0] : null)
+  const [pin, setPin] = useState('')
+  const [err, setErr] = useState('')
+  const [done, setDone] = useState(false)
+  async function tryPin(p) {
+    if (sel && p.length >= 4 && hashPin(p) === sel.pinHash) {
+      setDone(true)
+      await managerExit(sel)
+    }
+  }
+  function press(d) {
+    setErr('')
+    const p = (pin + d).slice(0, 8)
+    setPin(p)
+    tryPin(p)
+  }
+  useEffect(() => {
+    const h = (e) => {
+      if (e.key === 'Escape') onCancel()
+      else if (/^\d$/.test(e.key)) press(e.key)
+      else if (e.key === 'Backspace') setPin((p) => p.slice(0, -1))
+      else if (e.key === 'Enter' && sel && hashPin(pin) !== sel.pinHash) (setErr('קוד שגוי'), setPin(''))
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  })
+  return (
+    <div className="login">
+      <div className="login-box">
+        <div className="login-logo">🔓</div>
+        <h1>יציאה מהקופה</h1>
+        {done ? (
+          <p>
+            <b>יוצא…</b>
+            <br />
+            <span className="muted small">אם החלון לא נסגר תוך כמה שניות — לחץ Alt+F4</span>
+          </p>
+        ) : (
+          <>
+            <p className="muted">רק מנהל יכול לצאת ממצב קופה נעולה</p>
+            {!sel ? (
+              <div className="seller-list">
+                {managers.map((u) => (
+                  <button key={u.id} className="seller" onClick={() => setSel(u)}>
+                    <span className="av">{u.name[0]}</span>
+                    {u.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                <b>{sel.name} — הקש קוד מנהל</b>
+                <div className="pin-dots">
+                  {[0, 1, 2, 3].map((i) => (
+                    <span key={i} className={i < pin.length ? 'on' : ''} />
+                  ))}
+                </div>
+                {err && <div className="err">{err}</div>}
+                <div className="pad">
+                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', '✓'].map((k) => (
+                    <button
+                      key={k}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => (k === '⌫' ? setPin(pin.slice(0, -1)) : k === '✓' ? (hashPin(pin) === sel.pinHash ? tryPin(pin) : (setErr('קוד שגוי'), setPin(''))) : press(k))}
+                    >
+                      {k}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <button className="btn" onClick={onCancel}>
+              ביטול — חזרה לקופה
+            </button>
+          </>
+        )}
+      </div>
     </div>
   )
 }

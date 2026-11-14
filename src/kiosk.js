@@ -55,6 +55,34 @@ function sendNow(rows) {
   } catch {}
 }
 
+/** יציאה מורשית ע"י מנהל: רושם, מוריד קובץ-סימון לקובץ ההפעלה, וסוגר את החלון */
+export async function managerExit(manager) {
+  const now = nowIso()
+  const cur = get('device', deviceId()) || {}
+  save('device', { ...cur, id: deviceId(), name: deviceName(), kiosk: true, lastSeen: now, managerExit: { at: now, by: manager.name } }, { silent: true })
+  save('kevent', { id: uid(), deviceId: deviceId(), deviceName: deviceName(), type: 'exit_manager', seller: manager.name })
+  try {
+    const { flushNow } = await import('./sync.js')
+    await flushNow(4000)
+  } catch {}
+  exiting = true
+  // קובץ סימון בתיקיית ההורדות — קובץ ההפעלה רואה אותו ולא פותח את הקופה מחדש
+  try {
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob(['exit ' + now], { type: 'text/plain' }))
+    a.download = 'tatbus-exit.flag'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } catch {}
+  setTimeout(() => {
+    try {
+      window.close()
+    } catch {}
+  }, 1500)
+}
+let exiting = false
+
 let started = false
 export function startKioskMode() {
   if (!isKioskDevice || started) return
@@ -67,6 +95,7 @@ export function startKioskMode() {
   beat()
   setInterval(beat, HEARTBEAT_MS)
   const onClose = () => {
+    if (exiting) return
     const now = nowIso()
     const ev = { id: uid(), kind: 'kevent', deviceId: deviceId(), deviceName: deviceName(), type: 'closed', seller: currentSeller, createdAt: now, updatedAt: now, device: deviceId() }
     save('kevent', ev, { silent: true })
@@ -109,14 +138,20 @@ export function kioskStatus() {
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
   const alerts = []
   if (inAlertHours()) {
-    for (const d of devices) if (d.down && !d.muted) alerts.push({ key: 'down:' + d.id + ':' + d.lastSeen, level: 'high', text: `🔴 "${d.name}" לא פעילה מאז ${new Date(d.lastSeen).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`, deviceId: d.id })
+    for (const d of devices) if (d.down && !d.muted && !exitedByManager(d)) alerts.push({ key: 'down:' + d.id + ':' + d.lastSeen, level: 'high', text: `🔴 "${d.name}" לא פעילה מאז ${new Date(d.lastSeen).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`, deviceId: d.id })
     for (const e of events.slice(0, 5)) {
       const d = devices.find((x) => x.id === e.deviceId)
       if (d?.muted) continue
+      if (d?.managerExit && Math.abs(new Date(d.managerExit.at) - new Date(e.createdAt)) < 120000) continue
       alerts.push({ key: 'ev:' + e.id, level: 'mid', text: `⚠ "${e.deviceName}" נסגרה ב-${new Date(e.createdAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}${e.seller ? ` (מוכר מחובר: ${e.seller})` : ''}${d && !d.down && d.lastSeen > e.createdAt ? ' — ונפתחה שוב' : ''}`, deviceId: e.deviceId })
     }
   }
   return { devices, events, alerts }
+}
+
+// הקופה כבויה כי מנהל יצא ממנה (ולא חזרה לפעול מאז)
+function exitedByManager(d) {
+  return !!d.managerExit && new Date(d.managerExit.at).getTime() >= new Date(d.lastSeen || 0).getTime() - 120000
 }
 
 const notified = new Set()
