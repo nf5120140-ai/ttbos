@@ -1827,3 +1827,32 @@ main {
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
+.map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.imp-counts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.imp-err,
+tr.imp-error td {
+  color: var(--red);
+}
+.tag.imp-err {
+  background: #fde2e2;
+}
+tr.imp-new td:nth-child(2) {
+  color: var(--green);
+  font-weight: 700;
+}
+tr.imp-update td:nth-child(2) {
+  color: #2747a8;
+  font-weight: 700;
+}
+tr.imp-skip td {
+  opacity: 0.5;
+}

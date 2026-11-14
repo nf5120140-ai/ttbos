@@ -4,6 +4,7 @@ import { CreditModal, TerminalModal, creditStatus } from './Credit.jsx'
 import { InvoiceIntake } from './Invoice.jsx'
 import { PriceList } from './PriceList.jsx'
 import { Promos } from './Promos.jsx'
+import { ImportProducts, exportProducts } from './ImportProducts.jsx'
 import {
   useVersion,
   money,
@@ -407,6 +408,7 @@ export function Inventory({ user }) {
   const [invoice, setInvoice] = useState(false)
   const [priceList, setPriceList] = useState(false)
   const [promos, setPromos] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [counts, setCounts] = useState({})
   const products = useMemo(() => list('product'), [v])
   const suppliers = new Map(list('supplier').map((s) => [s.id, s.name]))
@@ -455,6 +457,12 @@ export function Inventory({ user }) {
               📋 ספירת מלאי
             </button>
           )}
+          <button className="btn" onClick={() => setImporting(true)}>
+            📥 ייבוא מאקסל
+          </button>
+          <button className="btn" onClick={() => exportProducts().catch((e) => toast(e.message, 'err'))}>
+            📤 ייצוא לאקסל
+          </button>
           <button className="btn" onClick={() => setPromos(true)}>
             🏷 מבצעים
           </button>
@@ -548,6 +556,7 @@ export function Inventory({ user }) {
       {invoice && <InvoiceIntake user={user} onClose={() => setInvoice(false)} />}
       {priceList && <PriceList onClose={() => setPriceList(false)} />}
       {promos && <Promos onClose={() => setPromos(false)} />}
+      {importing && <ImportProducts user={user} onClose={() => setImporting(false)} />}
     </div>
   )
 }
