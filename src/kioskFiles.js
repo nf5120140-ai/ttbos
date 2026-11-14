@@ -30,8 +30,13 @@ timeout /t 3 /nobreak >nul
 
 :loop
 start "" /wait "%CHROME%" --kiosk "%URL%" --user-data-dir="%PROFILE%" --no-first-run --disable-session-crashed-bubble --disable-features=Translate --overscroll-history-navigation=0 --disable-pinch
-timeout /t 2 /nobreak >nul
+REM Chrome sometimes hands the window to another chrome process and returns at once.
+REM Wait while the register window is still open - do NOT open another copy.
+:waitgone
+timeout /t 3 /nobreak >nul
 if exist "%FLAGDIR%\\tatbus-exit*.flag" goto managerexit
+powershell -NoProfile -WindowStyle Hidden -Command "if (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*TatbusKiosk*' }) { exit 1 } else { exit 0 }"
+if errorlevel 1 goto waitgone
 goto loop
 
 :managerexit
@@ -52,6 +57,24 @@ REM  Run ONCE while signed in as the kiosk Windows user (e.g. "Kupa").
 REM  - The register opens automatically (hidden launcher) at every login
 REM  - "Tatbus" icon on the desktop to reopen it after a manager exit
 REM ============================================================
+REM warn if this is an admin user (the register should run in its own standard user)
+set ADMIN=0
+powershell -NoProfile -Command "if ((whoami /groups) -match 'S-1-5-32-544') { exit 1 } else { exit 0 }"
+if errorlevel 1 set ADMIN=1
+if "%ADMIN%"=="0" goto doinstall
+echo.
+echo  WARNING: you are signed in as an ADMIN user.
+echo  The register will open full screen at EVERY login of this user.
+echo  Better: install it in a separate standard user (e.g. Kupa).
+echo.
+set OK=
+set /p OK=Install here anyway? Type YES: 
+if /i not "%OK%"=="YES" (
+  echo Cancelled. Nothing was installed.
+  pause
+  exit /b 1
+)
+:doinstall
 set RUN=%LOCALAPPDATA%\\TatbusKiosk-run
 set STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup
 if not exist "%RUN%" mkdir "%RUN%"
@@ -79,13 +102,15 @@ exit /b 1
 
 const uninstallBat = crlf(`@echo off
 REM Removes the kiosk register from this Windows user.
+REM 1) stop the hidden launcher and the register window
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*TatbusKiosk-run*') -or ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*TatbusKiosk*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 set STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup
 del "%STARTUP%\\tatbus-start.vbs" 2>nul
 del "%STARTUP%\\tatbus-kiosk.bat" 2>nul
 del "%USERPROFILE%\\Desktop\\Tatbus.vbs" 2>nul
 del "%USERPROFILE%\\Desktop\\Tatbus.bat" 2>nul
 rmdir /s /q "%LOCALAPPDATA%\\TatbusKiosk-run" 2>nul
-echo Removed. After sign-out / sign-in the computer opens normally.
+echo Removed. The register is closed and will not open again for this user.
 echo (The register data in %LOCALAPPDATA%\\TatbusKiosk was kept.)
 pause
 `)
