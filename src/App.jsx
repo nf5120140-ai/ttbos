@@ -3,6 +3,7 @@ import { DEMO, initDb, list, getSetting, setSetting, get, save, saveMany, hashPi
 import { startSync, syncNow, cloudConfigured, cloudLogin, cloudSignup, cloudResetPassword, cloudSetPassword, cloudLogout, setCloudConfig, nedarimFnUrl } from './sync.js'
 import { ParentTopup } from './Credit.jsx'
 import { useFingerprint, fpIdentify, fpEnroll } from './fp.js'
+import { isKioskDevice, startKioskMode, setKioskSeller, useKioskAlerts, kioskStatus, askNotifyPermission, setKioskDevice, STALE_MIN } from './kiosk.js'
 import { seedDemo } from './seed.js'
 import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime } from './ui.jsx'
 import Pos from './Pos.jsx'
@@ -28,6 +29,8 @@ function KioskApp() {
   const [tab, setTab] = useState('pos')
   const sync = useSyncStatus()
   useVersion()
+  const kiosk = useKioskAlerts(ready && user?.role === 'manager')
+  useEffect(() => setKioskSeller(user?.name || ''), [user])
 
   useEffect(() => {
     ;(async () => {
@@ -36,6 +39,7 @@ function KioskApp() {
       // גרסת הדגמה בלבד: טוען נתוני דוגמה אוטומטית
       if ((DEMO || import.meta.env.VITE_DEMO) && list('product').length === 0) seedDemo()
       await startSync()
+      startKioskMode()
       setReady(true)
     })()
   }, [])
@@ -92,6 +96,7 @@ function KioskApp() {
         <div className="brand">
           <span className="logo">ת</span>
           <span>תתבוס</span>
+          {isKioskDevice && <span className="kiosk-badge" title="מחשב קופה נעולה">🔒</span>}
         </div>
         <nav>
           {tabs.map(([k, i, l]) => (
@@ -108,6 +113,7 @@ function KioskApp() {
           </button>
         </div>
       </header>
+      {kiosk.alerts.length > 0 && <KioskAlertBar alerts={kiosk.alerts} onOpen={() => setTab('settings')} />}
       <main>
         {tab === 'pos' && <Pos user={fresh} />}
         {tab === 'customers' && <Customers user={fresh} />}
@@ -563,6 +569,8 @@ function Settings({ user, sync }) {
         </div>
       </div>
 
+      {isMgr && <KioskSettings />}
+
       {isMgr && <GeneralSettings />}
 
       {isMgr && <NedarimSettings mode={sync.mode} />}
@@ -843,6 +851,117 @@ function GeneralSettings() {
       >
         שמור
       </button>
+    </div>
+  )
+}
+
+function KioskAlertBar({ alerts, onOpen }) {
+  const markSeen = () => {
+    const s = getSetting('kiosk')
+    const mute = { ...(s.mute || {}) }
+    // קופה שלא פעילה — משתיקים את ההפסקה הזו בלבד
+    for (const a of alerts) if (a.level === 'high' && a.deviceId) mute[a.deviceId] = get('device', a.deviceId)?.lastSeen || ''
+    setSetting('kiosk', { seenAt: new Date().toISOString(), mute })
+  }
+  return (
+    <div className={'kiosk-alert ' + (alerts.some((a) => a.level === 'high') ? 'high' : '')}>
+      <div className="grow">
+        {alerts.map((a) => (
+          <div key={a.key}>{a.text}</div>
+        ))}
+      </div>
+      <button className="btn small" onClick={onOpen}>
+        פרטים
+      </button>
+      <button className="btn small" onClick={markSeen}>
+        ✓ ראיתי
+      </button>
+    </div>
+  )
+}
+
+function KioskSettings() {
+  useVersion()
+  const s = getSetting('kiosk')
+  const [from, setFrom] = useState(s.from || '07:00')
+  const [to, setTo] = useState(s.to || '23:30')
+  const [perm, setPerm] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
+  const st = kioskStatus()
+  const events = list('kevent')
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, 15)
+  const ago = (iso) => {
+    const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+    return m < 1 ? 'עכשיו' : m < 60 ? `לפני ${m} דק׳` : new Date(iso).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  }
+  return (
+    <div className="card">
+      <h3>🖥 קופות נעולות — התראות</h3>
+      <p className="muted small">
+        מחשב שנפתח מקובץ ההפעלה של הקופה מדווח כל דקה. אם הוא נסגר או מפסיק לדווח יותר מ-{STALE_MIN} דקות — תקפוץ כאן התראה למנהל (בכל מכשיר שבו מנהל מחובר).
+      </p>
+      <div className="row gap-s wrap">
+        <span>המחשב הזה: {isKioskDevice ? <b>🔒 קופה נעולה</b> : 'מחשב רגיל'}</span>
+        <button className="btn small" onClick={() => setKioskDevice(!isKioskDevice)}>
+          {isKioskDevice ? 'הפוך למחשב רגיל' : 'סמן כקופה נעולה'}
+        </button>
+      </div>
+      {st.devices.length > 0 ? (
+        <table>
+          <tbody>
+            {st.devices.map((d) => (
+              <tr key={d.id}>
+                <td>
+                  <b>{d.name}</b>
+                </td>
+                <td className={d.down ? 'neg' : 'pos-bal'}>{d.down ? '🔴 לא פעילה' : '🟢 פעילה'}</td>
+                <td className="small muted">דיווח אחרון: {ago(d.lastSeen)}</td>
+                <td className="small">{d.seller ? 'מוכר: ' + d.seller : ''}</td>
+                <td>
+                  <button className="btn small" onClick={() => save('device', { ...d, retired: true })} title="הסר מהרשימה (מחשב שכבר לא משמש כקופה)">
+                    הסר
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted small">אין עדיין קופות נעולות. אחרי הפעלה מקובץ הקופה החדש (עם ‎?kiosk=1) — המחשב יופיע כאן.</p>
+      )}
+      <Toggle checked={s.alerts !== false} onChange={(v) => setSetting('kiosk', { alerts: v })} label="להציג התראות" />
+      <div className="row gap-s wrap">
+        <span className="muted small">שעות התראה (מחוץ להן — שקט, למשל בלילה):</span>
+        <input type="time" value={from} onChange={(e) => setFrom(e.target.value)} style={{ width: 120 }} />
+        <span>עד</span>
+        <input type="time" value={to} onChange={(e) => setTo(e.target.value)} style={{ width: 120 }} />
+        <button className="btn small" onClick={() => (setSetting('kiosk', { from, to }), toast('נשמר'))}>
+          שמור
+        </button>
+      </div>
+      {perm !== 'unsupported' && (
+        <div className="row gap-s wrap">
+          <span className="muted small">התראה קופצת גם כשהחלון ברקע: {perm === 'granted' ? '✓ פעיל במכשיר הזה' : 'כבוי'}</span>
+          {perm !== 'granted' && (
+            <button className="btn small primary" onClick={async () => setPerm(await askNotifyPermission())}>
+              🔔 הפעל התראות במכשיר הזה
+            </button>
+          )}
+        </div>
+      )}
+      {events.length > 0 && (
+        <details>
+          <summary className="muted small">יומן פתיחה / סגירה</summary>
+          {events.map((e) => (
+            <div key={e.id} className="row space small">
+              <span>{new Date(e.createdAt).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+              <span>{e.deviceName}</span>
+              <span className={e.type === 'closed' ? 'neg' : 'pos-bal'}>{e.type === 'closed' ? 'נסגרה' : 'נפתחה'}</span>
+              <span className="muted">{e.seller}</span>
+            </div>
+          ))}
+        </details>
+      )}
     </div>
   )
 }

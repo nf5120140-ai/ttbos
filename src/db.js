@@ -5,7 +5,7 @@
 // שעובדים בלי אינטרנט במקביל לא דורסים זה את זה.
 // ============================================================
 
-export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice', 'promo']
+export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice', 'promo', 'device', 'kevent']
 
 // מצב הדגמה: ttbos.vercel.app/?demo — נתוני דוגמה, בלי שרת, במסד נפרד שלא נוגע בנתונים האמיתיים
 export const DEMO = (() => {

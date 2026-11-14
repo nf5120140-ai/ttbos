@@ -1856,3 +1856,21 @@ tr.imp-update td:nth-child(2) {
 tr.imp-skip td {
   opacity: 0.5;
 }
+.kiosk-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff3d6;
+  border-bottom: 2px solid #e0b44c;
+  padding: 8px 12px;
+  font-weight: 700;
+  font-size: 15px;
+}
+.kiosk-alert.high {
+  background: #fde2e2;
+  border-color: var(--red);
+  color: #8d1f1f;
+}
+.kiosk-badge {
+  font-size: 14px;
+}
