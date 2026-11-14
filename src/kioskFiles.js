@@ -33,7 +33,7 @@ start "" /wait "%CHROME%" --kiosk "%URL%" --user-data-dir="%PROFILE%" --no-first
 REM Chrome sometimes hands the window to another chrome process and returns at once.
 REM Wait while the register window is still open - do NOT open another copy.
 :waitgone
-timeout /t 3 /nobreak >nul
+timeout /t 1 /nobreak >nul
 if exist "%FLAGDIR%\\tatbus-exit*.flag" goto managerexit
 powershell -NoProfile -WindowStyle Hidden -Command "if (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*TatbusKiosk*' }) { exit 1 } else { exit 0 }"
 if errorlevel 1 goto waitgone
@@ -41,9 +41,18 @@ goto loop
 
 :managerexit
 del /q "%FLAGDIR%\\tatbus-exit*.flag" 2>nul
+REM full lock (register is the whole screen, no desktop): manager exit = sign out
+if /i "%~1"=="shell" shutdown /l
 exit /b 0
 `)
 }
+
+// במצב נעילה מלאה זה ה"מעטפת" של משתמש הקופה במקום שולחן העבודה של Windows
+const shellVbs = crlf(`' Tatbus - full lock: the register IS the screen (no desktop, no taskbar)
+Set sh = CreateObject("WScript.Shell")
+p = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\\TatbusKiosk-run\\tatbus-kiosk.bat"
+sh.Run "cmd /c """ & p & """ shell", 0, True
+`)
 
 const hiddenVbs = crlf(`' Tatbus - start the register hidden (no black window)
 Set sh = CreateObject("WScript.Shell")
@@ -80,6 +89,7 @@ set STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup
 if not exist "%RUN%" mkdir "%RUN%"
 copy /Y "%~dp0tatbus-kiosk.bat" "%RUN%\\tatbus-kiosk.bat" >nul || goto fail
 copy /Y "%~dp0tatbus-start.vbs" "%RUN%\\tatbus-start.vbs" >nul || goto fail
+copy /Y "%~dp0tatbus-shell.vbs" "%RUN%\\tatbus-shell.vbs" >nul || goto fail
 REM remove old (visible) launcher from older versions
 del "%STARTUP%\\tatbus-kiosk.bat" 2>nul
 del "%USERPROFILE%\\Desktop\\Tatbus.bat" 2>nul
@@ -118,7 +128,7 @@ pause
 // ---- נעילת Windows למשתמש הקופה ----
 // משתמש רגיל לא יכול לכתוב הגדרות מדיניות, לכן הקובץ מבקש הרשאת מנהל (UAC)
 // וכותב את ההגדרות ישירות לפרופיל של משתמש הקופה (לא של המנהל).
-const lockPs1 = crlf(String.raw`param([switch]$Unlock)
+const lockPs1 = (appHost) => crlf(String.raw`param([switch]$Unlock)
 $ErrorActionPreference = 'Continue'
 
 function Test-Admin($sid) {
@@ -169,6 +179,13 @@ if (-not $Unlock) {
     Write-Host 'Create a separate STANDARD user for the register, sign in to it once, and run this again.'
     exit 1
   }
+  $shellFile = Join-Path $u.Path 'AppData\Local\TatbusKiosk-run\tatbus-shell.vbs'
+  if (-not (Test-Path $shellFile)) {
+    Write-Host ''
+    Write-Host ("The register is not installed in '" + $u.Name + "'.") -ForegroundColor Red
+    Write-Host 'Sign in as that user, run install-kiosk.bat (new version), then run this again.'
+    exit 1
+  }
   $ok = Read-Host ("Lock '" + $u.Name + "'? Type YES")
   if ($ok -ne 'YES') { Write-Host 'Cancelled. Nothing was changed.'; exit 1 }
 }
@@ -181,7 +198,11 @@ foreach ($u in $sel) {
   if (-not (Test-Path $root)) { & reg.exe load "HKU\$($u.Sid)" "$($u.Path)\NTUSER.DAT" | Out-Null; $loaded = $true }
   $exp = "$root\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
   $sys = "$root\Software\Microsoft\Windows\CurrentVersion\Policies\System"
+  $wl = "$root\Software\Microsoft\Windows NT\CurrentVersion\Winlogon"
+  $gc = "$root\Software\Policies\Google\Chrome"
   if ($Unlock) {
+    Remove-Item -Path $gc -Recurse -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $wl -Name 'Shell' -ErrorAction SilentlyContinue
     foreach ($v in $expVals) { Remove-ItemProperty -Path $exp -Name $v -ErrorAction SilentlyContinue }
     Remove-Item -Path "$exp\RestrictRun" -Recurse -ErrorAction SilentlyContinue
     foreach ($v in $sysVals) { Remove-ItemProperty -Path $sys -Name $v -ErrorAction SilentlyContinue }
@@ -194,7 +215,22 @@ foreach ($u in $sel) {
     $i = 1
     foreach ($app in 'chrome.exe','wscript.exe','cmd.exe') { New-ItemProperty -Path "$exp\RestrictRun" -Name "$i" -Value $app -PropertyType String -Force | Out-Null; $i++ }
     foreach ($v in $sysVals) { New-ItemProperty -Path $sys -Name $v -Value 1 -PropertyType DWord -Force | Out-Null }
+    # Chrome for this user: only the register sites, no incognito, no dev tools, no settings
+    Remove-Item -Path $gc -Recurse -ErrorAction SilentlyContinue
+    New-Item -Path "$gc\URLBlocklist" -Force | Out-Null
+    New-ItemProperty -Path "$gc\URLBlocklist" -Name '1' -Value '*' -PropertyType String -Force | Out-Null
+    New-Item -Path "$gc\URLAllowlist" -Force | Out-Null
+    $i = 1
+    foreach ($h in @('${appHost}', 'supabase.co', 'matara.pro', 'nedarimplus.co.il', 'blob:*', 'data:*')) { New-ItemProperty -Path "$gc\URLAllowlist" -Name "$i" -Value $h -PropertyType String -Force | Out-Null; $i++ }
+    foreach ($kv in @(@('IncognitoModeAvailability', 1), @('DeveloperToolsAvailability', 2), @('BrowserAddPersonEnabled', 0), @('BrowserGuestModeEnabled', 0), @('PasswordManagerEnabled', 0), @('PromptForDownloadLocation', 0))) {
+      New-ItemProperty -Path $gc -Name $kv[0] -Value $kv[1] -PropertyType DWord -Force | Out-Null
+    }
+    # the register replaces the Windows desktop for this user (no taskbar / desktop / start)
+    New-Item -Path $wl -Force | Out-Null
+    $sf = Join-Path $u.Path 'AppData\Local\TatbusKiosk-run\tatbus-shell.vbs'
+    New-ItemProperty -Path $wl -Name 'Shell' -Value ('wscript.exe "' + $sf + '"') -PropertyType String -Force | Out-Null
     Write-Host ("LOCKED: " + $u.Name) -ForegroundColor Green
+    Write-Host 'This user now sees ONLY the register. Manager exit (Ctrl+Shift+Q) signs out.' 
     Write-Host 'Copy unlock-kiosk.bat + kiosk-lock.ps1 to a USB stick.'
   }
   if ($loaded) { [gc]::Collect(); Start-Sleep 1; & reg.exe unload "HKU\$($u.Sid)" | Out-Null }
@@ -233,7 +269,10 @@ const readme = crlf(`TATBUS - LOCKED REGISTER FOR WINDOWS
    unlock-kiosk.bat from the computer.
 
 Manager exit:     Ctrl+Shift+Q inside the register + manager PIN
-Reopen register:  double-click "Tatbus" on the desktop
+                  (when locked: this signs the user out)
+Reopen register:  double-click "Tatbus" on the desktop (when not locked)
+When locked:      there is no desktop at all - only the register.
+                  Alt+F4 / closing just reopens it within 2-3 seconds.
 Unlock Windows:   run unlock-kiosk.bat from the USB stick, pick the user (0 = all)
 Remove:           unlock first, then run uninstall-kiosk.bat (as the register user)
 Emergency:        sign in with your admin user - nothing is locked there.
@@ -312,9 +351,10 @@ export function kioskFiles(origin = location.origin) {
     { name: 'install-kiosk.bat', data: installBat },
     { name: 'tatbus-kiosk.bat', data: launcherBat(url) },
     { name: 'tatbus-start.vbs', data: hiddenVbs },
+    { name: 'tatbus-shell.vbs', data: shellVbs },
     { name: 'uninstall-kiosk.bat', data: uninstallBat },
     { name: 'lock-kiosk.bat', data: lockBat },
-    { name: 'kiosk-lock.ps1', data: lockPs1 },
+    { name: 'kiosk-lock.ps1', data: lockPs1(new URL(origin).host) },
     { name: 'unlock-kiosk.bat', data: unlockBat },
     { name: 'README.txt', data: readme },
   ]
