@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { list, get, save, remove, balanceOf, stockOf, topup, buildTopup, voidTopup, receiveStock, setStockTo, round2, getSetting } from './db.js'
+import { list, get, save, remove, productCodes, sameCode, splitCodes, balanceOf, stockOf, topup, buildTopup, voidTopup, receiveStock, setStockTo, round2, getSetting } from './db.js'
 import { CreditModal, TerminalModal, creditStatus } from './Credit.jsx'
 import { InvoiceIntake } from './Invoice.jsx'
 import { PriceList } from './PriceList.jsx'
 import { Promos } from './Promos.jsx'
+import { ImportProducts, exportProducts } from './ImportProducts.jsx'
 import {
   useVersion,
   money,
@@ -407,13 +408,14 @@ export function Inventory({ user }) {
   const [invoice, setInvoice] = useState(false)
   const [priceList, setPriceList] = useState(false)
   const [promos, setPromos] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [counts, setCounts] = useState({})
   const products = useMemo(() => list('product'), [v])
   const suppliers = new Map(list('supplier').map((s) => [s.id, s.name]))
   const shown = products
     .filter((p) => (filter === 'inactive' ? p.active === false : p.active !== false))
     .filter((p) => filter !== 'low' || stockOf(p.id) <= (Number(p.minStock) || 0))
-    .filter((p) => !q || p.name.includes(q) || (p.barcode || '').includes(q) || (p.category || '').includes(q))
+    .filter((p) => !q || p.name.includes(q) || productCodes(p).some((c) => c.includes(q)) || (p.category || '').includes(q))
     .sort((a, b) => (a.category || '').localeCompare(b.category || '', 'he') || a.name.localeCompare(b.name, 'he'))
   const lowCount = products.filter((p) => p.active !== false && stockOf(p.id) <= (Number(p.minStock) || 0)).length
   const stockValue = round2(products.filter((p) => p.active !== false).reduce((s, p) => s + Math.max(0, stockOf(p.id)) * (Number(p.cost) || 0), 0))
@@ -455,6 +457,12 @@ export function Inventory({ user }) {
               📋 ספירת מלאי
             </button>
           )}
+          <button className="btn" onClick={() => setImporting(true)}>
+            📥 ייבוא מאקסל
+          </button>
+          <button className="btn" onClick={() => exportProducts().catch((e) => toast(e.message, 'err'))}>
+            📤 ייצוא לאקסל
+          </button>
           <button className="btn" onClick={() => setPromos(true)}>
             🏷 מבצעים
           </button>
@@ -504,7 +512,12 @@ export function Inventory({ user }) {
                   </td>
                   <td>
                     <b>{p.name}</b>
-                    {p.barcode && <div className="muted small">{p.barcode}</div>}
+                    {p.barcode && (
+                      <div className="muted small">
+                        {p.barcode}
+                        {p.barcodes?.length ? ` +${p.barcodes.length} ברקודים` : ''}
+                      </div>
+                    )}
                   </td>
                   <td>{p.category}</td>
                   <td>{money(p.price)}</td>
@@ -548,6 +561,7 @@ export function Inventory({ user }) {
       {invoice && <InvoiceIntake user={user} onClose={() => setInvoice(false)} />}
       {priceList && <PriceList onClose={() => setPriceList(false)} />}
       {promos && <Promos onClose={() => setPromos(false)} />}
+      {importing && <ImportProducts user={user} onClose={() => setImporting(false)} />}
     </div>
   )
 }
@@ -555,7 +569,8 @@ export function Inventory({ user }) {
 const EMOJIS = ['🥤', '💧', '🥛', '🧃', '☕', '🍵', '🥜', '🥨', '🥔', '🍫', '🍬', '🍭', '🍪', '🥪', '🥐', '🫓', '🥮', '🍕', '🌭', '🍦', '🍎', '🍌', '🧀', '🥚', '🍩', '🧁', '📦']
 
 function ProductEditor({ p, user, onClose }) {
-  const [f, setF] = useState({ ...p })
+  const [f, setF] = useState({ ...p, barcodes: Array.isArray(p.barcodes) ? p.barcodes : [] })
+  const [extra, setExtra] = useState('')
   const [initStock, setInitStock] = useState('')
   const [cam, setCam] = useState(false)
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? e.target.value : e })
@@ -577,10 +592,26 @@ function ProductEditor({ p, user, onClose }) {
       toast('לא הצלחתי לטעון תמונה', 'err')
     }
   }
+  function addExtra(v) {
+    const codes = splitCodes(v)
+    if (!codes.length) return
+    setF((pp) => {
+      const cur = productCodes(pp)
+      const add = codes.filter((c) => !cur.some((y) => sameCode(y, c)))
+      if (!pp.barcode && add.length) return { ...pp, barcode: add[0], barcodes: [...pp.barcodes, ...add.slice(1)] }
+      return { ...pp, barcodes: [...pp.barcodes, ...add] }
+    })
+    setExtra('')
+  }
   function ok() {
     if (!f.name?.trim()) return toast('חסר שם', 'err')
     if (!(Number(f.price) >= 0) || f.price === '' || f.price == null) return toast('חסר מחיר', 'err')
-    if (f.barcode && list('product').some((x) => x.id !== f.id && x.barcode === f.barcode)) return toast('ברקוד כבר קיים במוצר אחר', 'err')
+    const mine = productCodes(f)
+    for (const c of mine) {
+      const other = list('product').find((x) => x.id !== f.id && productCodes(x).some((y) => sameCode(y, c)))
+      if (other) return toast(`ברקוד ${c} כבר קיים במוצר "${other.name}"`, 'err')
+    }
+    if (mine.some((c, i) => mine.findIndex((y) => sameCode(y, c)) !== i)) return toast('אותו ברקוד מופיע פעמיים', 'err')
     const rec = save('product', {
       ...f,
       name: f.name.trim(),
@@ -652,6 +683,33 @@ function ProductEditor({ p, user, onClose }) {
             )}
           </div>
         </Field>
+        <Field label="ברקודים נוספים (למשל לכל מידה / צבע — אותו מוצר ואותו מחיר)">
+          <div className="chips">
+            {f.barcodes.map((c) => (
+              <span key={c} className="chip">
+                {c}
+                <button className="icon-btn" title="הסר" onClick={() => setF((pp) => ({ ...pp, barcodes: pp.barcodes.filter((x) => x !== c) }))}>
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="row gap-s">
+            <input
+              value={extra}
+              placeholder="סרוק או הקלד ← Enter"
+              onChange={(e) => setExtra(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== 'Tab') return
+                e.preventDefault()
+                addExtra(extra)
+              }}
+            />
+            <button className="btn" onClick={() => addExtra(extra)}>
+              + הוסף
+            </button>
+          </div>
+        </Field>
         <Field label="מחיר מכירה ₪">
           <input type="number" inputMode="decimal" value={f.price ?? ''} onChange={set('price')} />
         </Field>
@@ -710,7 +768,7 @@ function ProductEditor({ p, user, onClose }) {
         <CameraScanner
           onClose={() => setCam(false)}
           onCode={(x) => {
-            setF((pp) => ({ ...pp, barcode: x }))
+            setF((pp) => (pp.barcode && !sameCode(pp.barcode, x) ? { ...pp, barcodes: pp.barcodes.some((y) => sameCode(y, x)) ? pp.barcodes : [...pp.barcodes, x] } : { ...pp, barcode: x }))
             setCam(false)
           }}
         />
