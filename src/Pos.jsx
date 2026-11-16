@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
-import { list, get, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
+import { useEffect, useMemo, useState } from 'react'
+import { publishDisplay, listenHello } from './display.js'
+import { openDrawer } from './drawer.js'
+import { list, get, getSetting, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
 import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
 import { VerifyStaffModal, staffMethodLabel } from './Staff.jsx'
 import { priceCart, unitPromoFor, bundlesFor, staffUnit, livePromos, promoLabel } from './pricing.js'
@@ -13,6 +15,7 @@ import {
   Modal,
   ProductThumb,
   useBarcodeScanner,
+  useScanField,
   cameraScanSupported,
   CameraScanner,
   Empty,
@@ -81,6 +84,27 @@ export default function Pos({ user }) {
   const itemsCount = lines.reduce((s, l) => s + l.qty, 0)
   const balance = customer ? balanceOf(customer.id) : 0
 
+  // ---- מסך לקוח ----
+  useEffect(() => listenHello(), [])
+  const dispTitle = getSetting('general').title || ''
+  useEffect(() => {
+    const cust = customer ? { name: customer.name, balance } : null
+    if (!lines.length) return publishDisplay({ state: 'idle', title: dispTitle, customer: cust })
+    publishDisplay({
+      state: 'cart',
+      title: dispTitle,
+      customer: cust,
+      lines: lines.map((l) => ({ name: l.p.name, emoji: l.p.emoji || '', qty: l.qty, unit: l.unit, sum: round2(l.unit * l.qty), promo: l.promoName || '' })),
+      total,
+      saving,
+      count: itemsCount,
+    })
+  }, [JSON.stringify(cart), customerId, total, balance, dispTitle])
+  function thanks(extra = {}) {
+    const c = customer ? { name: customer.name, balance: balanceOf(customer.id) } : null
+    publishDisplay({ state: 'thanks', title: dispTitle, total, customer: extra.wallet ? c : null, change: extra.change || 0 })
+  }
+
   function add(p, n = 1) {
     setCart((c) => {
       const ex = c.find((x) => x.productId === p.id)
@@ -122,6 +146,7 @@ export default function Pos({ user }) {
     toast('לא נמצא ברקוד ' + code, 'err')
     return false
   }
+  const scanField = useScanField(q, setQ, handleCode)
   useBarcodeScanner(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen && !verifyFor)
 
   function items() {
@@ -143,12 +168,15 @@ export default function Pos({ user }) {
       return
     }
     sell({ ...saleArgs('wallet') })
+    thanks({ wallet: true })
     toast(`✓ ${customer.name} — נשארו ${money(balance - total)}`)
     clear()
   }
   function payCash(received) {
     sell({ ...saleArgs('cash'), received })
+    openDrawer() // מגירת כסף — רק במזומן
     const change = round2((received || total) - total)
+    thanks({ change })
     toast(change > 0 ? `✓ שולם. עודף: ${money(change)}` : '✓ שולם במזומן')
     setCashModal(false)
     clear()
@@ -168,6 +196,7 @@ export default function Pos({ user }) {
   }
   function payTerminal(t) {
     sell(saleArgs('terminal', { terminal: t }))
+    thanks()
     toast('✓ נרשם — שולם באשראי במסופון')
     setTerminalOpen(false)
     clear()
@@ -180,8 +209,9 @@ export default function Pos({ user }) {
           <input
             placeholder="🔍 חיפוש מוצר / ברקוד…"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={scanField.onChange}
             onKeyDown={(e) => {
+              if (scanField.onKeyDown(e)) return
               if (e.key === 'Enter' && q.trim()) {
                 const exact = products.find((p) => p.barcode && p.barcode === q.trim())
                 const card = list('customer').find((c) => c.card && String(c.card) === q.trim())
@@ -190,6 +220,9 @@ export default function Pos({ user }) {
                   setQ('')
                 } else if (shown.length === 1) {
                   add(shown[0])
+                  setQ('')
+                } else if (/^\d{6,}$/.test(q.trim())) {
+                  handleCode(q)
                   setQ('')
                 }
               }
@@ -393,6 +426,7 @@ export default function Pos({ user }) {
           comment={'מזנון: ' + lines.map((l) => l.p.name + (l.qty > 1 ? '×' + l.qty : '')).join(', ')}
           buildOps={() => buildSale({ ...saleArgs('credit') }).ops}
           onPaid={() => {
+            thanks()
             toast('✓ שולם באשראי')
             clear()
           }}

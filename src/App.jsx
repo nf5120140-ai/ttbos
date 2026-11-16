@@ -8,6 +8,10 @@ import { managerExit, isKioskDevice, startKioskMode, setKioskSeller, useKioskAle
 import { seedDemo } from './seed.js'
 import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime } from './ui.jsx'
 import Pos from './Pos.jsx'
+import CustomerDisplay from './CustomerDisplay.jsx'
+import { IS_DISPLAY, regId } from './display.js'
+import { vfdCfg, setVfdCfg, vfdPick, vfdTest, vfdSupported } from './vfd.js'
+import { drawerCfg, setDrawerCfg, drawerPick, openDrawer, drawerSupported } from './drawer.js'
 import { Customers, Inventory, Orders } from './Manage.jsx'
 import { Reports, CashCount } from './Reports.jsx'
 
@@ -20,6 +24,7 @@ const TOPUP_ID = (() => {
 })()
 
 export default function App() {
+  if (IS_DISPLAY) return <CustomerDisplay />
   if (TOPUP_ID) return <ParentTopup customerId={TOPUP_ID} />
   return <KioskApp />
 }
@@ -916,6 +921,18 @@ function KioskSettings() {
         מחשב שנפתח מקובץ ההפעלה של הקופה מדווח כל דקה. יציאה מורשית: <b>Ctrl+Shift+Q</b> בקופה + קוד מנהל. אם הוא נסגר או מפסיק לדווח יותר מ-{STALE_MIN} דקות — תקפוץ כאן התראה למנהל (בכל מכשיר שבו מנהל מחובר).
       </p>
       <div className="kiosk-install">
+        <b>🧍 מסך לקוח</b>
+        <p className="small">
+          במחשב קופה עם מסך שני (מסך קטן שפונה לקונה) — קבצי הקופה הנעולה פותחים עליו אוטומטית את מסך הלקוח: המוצרים שנסרקו, הסכום לתשלום והיתרה בארנק.
+          במחשב אחר אפשר לפתוח אותו ידנית ולגרור למסך השני:
+        </p>
+        <button className="btn" onClick={() => window.open(location.origin + '/?display=1&reg=' + regId(), 'tatbus-display', 'popup,width=800,height=480')}>
+          פתח מסך לקוח בחלון
+        </button>
+      </div>
+      <VfdSettings />
+      <DrawerSettings />
+      <div className="kiosk-install">
         <b>🖥 התקנת קופה נעולה במחשב Windows</b>
         <ol className="small">
           <li>במחשב הקופה יוצרים משתמש Windows רגיל (לא מנהל), למשל "Kupa", ונכנסים אליו. מוודאים ש-Google Chrome מותקן.</li>
@@ -1083,6 +1100,138 @@ function ManagerExit({ onCancel }) {
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+// צג לקוח קטן (2 שורות) — ההגדרה נשמרת במחשב הזה בלבד
+function VfdSettings() {
+  const [c, setC] = useState(vfdCfg())
+  const upd = (x) => {
+    setVfdCfg(x)
+    setC(vfdCfg())
+  }
+  return (
+    <div className="kiosk-install">
+      <b>🔢 צג לקוח קטן (2 שורות, "מספרים רצים")</b>
+      <p className="small">
+        לקופה שיש לה צג קטן שמציג מחיר. מגדירים <b>במחשב הקופה עצמו</b>, מתוך הקופה (משתמש הקופה), פעם אחת.
+      </p>
+      {!vfdSupported ? (
+        <p className="small">הדפדפן הזה לא תומך — צריך Google Chrome במחשב Windows.</p>
+      ) : (
+        <>
+          <div className="row gap-s wrap">
+            <button
+              className="btn primary"
+              onClick={async () => {
+                try {
+                  await vfdPick()
+                  setC(vfdCfg())
+                  await vfdTest()
+                  toast('✓ הצג חובר — אמור להופיע עליו TEST')
+                } catch (e) {
+                  if (e?.name !== 'NotFoundError') toast('לא הצלחתי להתחבר לצג: ' + (e.message || e), 'err')
+                }
+              }}
+            >
+              🔌 חבר צג
+            </button>
+            <button className="btn" disabled={!c.enabled} onClick={() => vfdTest().then(() => toast('נשלחה בדיקה לצג'))}>
+              בדיקה
+            </button>
+            <Toggle label="פעיל" checked={c.enabled} onChange={(v) => upd({ enabled: v })} />
+          </div>
+          <div className="row gap-s wrap" style={{ marginTop: 8 }}>
+            <Field label="מהירות (Baud)">
+              <select value={c.baud} onChange={(e) => upd({ baud: Number(e.target.value) })}>
+                {[2400, 4800, 9600, 19200, 38400, 115200].map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="סוג פקודות">
+              <select value={c.proto} onChange={(e) => upd({ proto: e.target.value })}>
+                <option value="escpos">ESC/POS (Epson) — ברירת מחדל</option>
+                <option value="cd5220">CD5220</option>
+              </select>
+            </Field>
+            <Field label="תווים בשורה">
+              <select value={c.cols} onChange={(e) => upd({ cols: Number(e.target.value) })}>
+                {[16, 20, 24, 40].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </Field>
+            <Toggle label="עברית (אם הצג תומך)" checked={c.heb} onChange={(v) => upd({ heb: v })} />
+          </div>
+          <p className="muted small">
+            בלחיצה על "חבר צג" נפתחת רשימה — בוחרים את היציאה של הצג (למשל USB Serial / COM). אם בבדיקה מופיעים סימנים משובשים — מנסים מהירות אחרת או סוג פקודות אחר.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+// מגירת כסף — נפתחת אוטומטית בסוף מכירה במזומן. ההגדרה נשמרת במחשב הזה בלבד
+function DrawerSettings() {
+  const [c, setC] = useState(drawerCfg())
+  const upd = (x) => {
+    setDrawerCfg(x)
+    setC(drawerCfg())
+  }
+  return (
+    <div className="kiosk-install">
+      <b>💰 מגירת כסף</b>
+      <p className="small">
+        נפתחת לבד בסוף מכירה <b>במזומן</b> בלבד. מגדירים <b>במחשב הקופה עצמו</b>, פעם אחת. המגירה מחוברת בדרך כלל למדפסת הקבלות או ישירות למחשב.
+      </p>
+      {!drawerSupported ? (
+        <p className="small">הדפדפן הזה לא תומך — צריך Google Chrome במחשב Windows.</p>
+      ) : (
+        <>
+          <div className="row gap-s wrap">
+            <button
+              className="btn primary"
+              onClick={async () => {
+                try {
+                  await drawerPick()
+                  setC(drawerCfg())
+                  await openDrawer()
+                  toast('✓ חובר — המגירה אמורה להיפתח עכשיו')
+                } catch (e) {
+                  if (e?.name !== 'NotFoundError') toast('לא הצלחתי להתחבר: ' + (e.message || e), 'err')
+                }
+              }}
+            >
+              🔌 חבר מגירה
+            </button>
+            <button className="btn" disabled={!c.enabled} onClick={() => openDrawer().then((ok) => toast(ok ? 'נשלחה פקודת פתיחה' : 'לא מחובר', ok ? undefined : 'err'))}>
+              פתח לבדיקה
+            </button>
+            <Toggle label="פעיל" checked={c.enabled} onChange={(v) => upd({ enabled: v })} />
+          </div>
+          <div className="row gap-s wrap" style={{ marginTop: 8 }}>
+            <Field label="מהירות (Baud)">
+              <select value={c.baud} onChange={(e) => upd({ baud: Number(e.target.value) })}>
+                {[9600, 19200, 38400, 57600, 115200].map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="פין">
+              <select value={c.pin} onChange={(e) => upd({ pin: Number(e.target.value) })}>
+                <option value={0}>פין 2 (ברירת מחדל)</option>
+                <option value={1}>פין 5</option>
+              </select>
+            </Field>
+          </div>
+          <p className="muted small">
+            ב"חבר מגירה" בוחרים את היציאה של המדפסת או של המגירה. אם המגירה לא נפתחת — מנסים פין 5 או מהירות אחרת.
+          </p>
+        </>
+      )}
     </div>
   )
 }
