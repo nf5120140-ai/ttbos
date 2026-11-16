@@ -11,7 +11,7 @@ import Pos from './Pos.jsx'
 import CustomerDisplay from './CustomerDisplay.jsx'
 import { IS_DISPLAY, regId } from './display.js'
 import { vfdCfg, setVfdCfg, vfdPick, vfdTest, vfdSupported } from './vfd.js'
-import { drawerCfg, setDrawerCfg, drawerPick, openDrawer, drawerSupported } from './drawer.js'
+import { drawerCfg, setDrawerCfg, drawerPick, openDrawer, drawerSupported, scanDrawer } from './drawer.js'
 import { Customers, Inventory, Orders } from './Manage.jsx'
 import { Reports, CashCount } from './Reports.jsx'
 
@@ -1208,6 +1208,21 @@ function DrawerSettings() {
               }}
             >
               🔌 חבר מגירה
+            </button>
+            <button
+              className="btn"
+              onClick={async () => {
+                try {
+                  const r = await scanDrawer((text) => confirmDlg(text, '✓ כן, נפתחה', '✗ לא — נסה הבא', 'primary'))
+                  setC(drawerCfg())
+                  if (r) toast(`✓ נמצאה! ${r.port} · ${r.label} — נשמר`)
+                  else toast('לא נמצא שילוב שפותח את המגירה. נסה "חבר מגירה" ובחר יציאה אחרת, או שלח לי את דגם המחשב', 'err')
+                } catch (e) {
+                  if (e?.name !== 'NotFoundError') toast('שגיאה בחיפוש: ' + (e.message || e), 'err')
+                }
+              }}
+            >
+              🔎 חפש מגירה אוטומטית
             </button>
             <button className="btn" disabled={!c.enabled} onClick={() => openDrawer().then((ok) => toast(ok ? 'נשלחה פקודת פתיחה' : 'לא מחובר', ok ? undefined : 'err'))}>
               פתח לבדיקה

@@ -50,9 +50,6 @@ export function Reports({ user }) {
     const sales = list('sale').filter((s) => s.createdAt >= sIso && s.createdAt < eIso && (device === 'all' || s.device === device))
     const ok = sales.filter((s) => !s.voided)
     const voided = sales.filter((s) => s.voided)
-    const drawerOpens = list('kevent')
-      .filter((e) => e.type === 'drawer' && e.createdAt >= sIso && e.createdAt < eIso && (device === 'all' || e.deviceId === device))
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
     const sum = (arr, f) => round2(arr.reduce((a, x) => a + f(x), 0))
     const revenue = sum(ok, (s) => s.total)
     const cash = sum(
@@ -170,7 +167,6 @@ export function Reports({ user }) {
       sales,
       ok,
       voided,
-      drawerOpens,
       revenue,
       cash,
       wallet,
@@ -434,23 +430,6 @@ export function Reports({ user }) {
                   <td>{r.users.get(s.sellerId)}</td>
                   <td>{money(s.total)}</td>
                   <td>{money(s.items.reduce((b, i) => b + (i.staffApplied || (!i.promoId && i.staffApplied === undefined) ? i.qty * Math.max(0, (i.regularPrice ?? i.price) - i.price) : 0), 0))}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {r.drawerOpens.length > 0 && (
-        <div className="card">
-          <h3>🔓 פתיחות מגירה בלי מכירה ({r.drawerOpens.length})</h3>
-          <table>
-            <tbody>
-              {r.drawerOpens.map((e) => (
-                <tr key={e.id}>
-                  <td>{fmtDT(e.createdAt)}</td>
-                  <td>{e.seller || '—'}</td>
-                  <td className="muted small">{e.deviceName || ''}</td>
                 </tr>
               ))}
             </tbody>

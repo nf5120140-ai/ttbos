@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { publishDisplay, listenHello } from './display.js'
-import { openDrawer, openDrawerManual, drawerCfg } from './drawer.js'
-import { list, get, getSetting, sameCode, productHasCode, productCodes, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
+import { openDrawer } from './drawer.js'
+import { list, get, getSetting, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
 import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
 import { VerifyStaffModal, staffMethodLabel } from './Staff.jsx'
 import { priceCart, unitPromoFor, bundlesFor, staffUnit, livePromos, promoLabel } from './pricing.js'
@@ -60,7 +60,7 @@ export default function Pos({ user }) {
     let arr = products
     if (q.trim()) {
       const s = q.trim().toLowerCase()
-      arr = arr.filter((p) => p.name.toLowerCase().includes(s) || productCodes(p).some((c) => c.includes(s)))
+      arr = arr.filter((p) => p.name.toLowerCase().includes(s) || (p.barcode || '').includes(s))
     } else if (cat === '__top') {
       const byId = new Map(products.map((p) => [p.id, p]))
       const tops = topIds.map((id) => byId.get(id)).filter(Boolean)
@@ -131,13 +131,13 @@ export default function Pos({ user }) {
 
   function handleCode(code) {
     code = String(code).trim()
-    const p = products.find((x) => productHasCode(x, code))
+    const p = products.find((x) => x.barcode && x.barcode === code)
     if (p) {
       add(p)
       toast('➕ ' + p.name)
       return true
     }
-    const c = list('customer').find((x) => sameCode(x.card, code))
+    const c = list('customer').find((x) => x.card && String(x.card) === code)
     if (c) {
       selectCustomer(c)
       toast('👤 ' + c.name)
@@ -213,8 +213,8 @@ export default function Pos({ user }) {
             onKeyDown={(e) => {
               if (scanField.onKeyDown(e)) return
               if (e.key === 'Enter' && q.trim()) {
-                const exact = products.find((p) => productHasCode(p, q))
-                const card = list('customer').find((c) => sameCode(c.card, q))
+                const exact = products.find((p) => p.barcode && p.barcode === q.trim())
+                const card = list('customer').find((c) => c.card && String(c.card) === q.trim())
                 if (exact || card) {
                   handleCode(q)
                   setQ('')
@@ -400,17 +400,6 @@ export default function Pos({ user }) {
             <button className="btn small grow" onClick={() => setRecent(true)}>
               🧾 מכירות אחרונות
             </button>
-            {drawerCfg().enabled && can(user, 'drawer') && (
-              <button
-                className="btn small grow"
-                onClick={async () => {
-                  const ok = await openDrawerManual(user)
-                  toast(ok ? '🔓 המגירה נפתחה (נרשם)' : 'לא הצלחתי לפתוח את המגירה — בדוק בהגדרות', ok ? undefined : 'err')
-                }}
-              >
-                🔓 פתח מגירה
-              </button>
-            )}
           </div>
         </div>
       </section>
