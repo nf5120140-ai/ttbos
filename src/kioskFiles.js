@@ -12,7 +12,8 @@ REM  Opens ONLY the register, full screen. If someone closes it
 REM  it reopens automatically and the manager gets an alert.
 REM  Manager exit: Ctrl+Shift+Q inside the register + manager PIN.
 REM ============================================================
-set URL=${url}
+set "URL=${url}&reg=%COMPUTERNAME%"
+set "DURL=${url.replace('?kiosk=1', '?display=1')}&reg=%COMPUTERNAME%"
 set PROFILE=%LOCALAPPDATA%\\TatbusKiosk
 set FLAGDIR=%USERPROFILE%\\Downloads
 
@@ -20,12 +21,15 @@ set CHROME=%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe
 if not exist "%CHROME%" set CHROME=%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe
 if not exist "%CHROME%" set CHROME=%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe
 if not exist "%CHROME%" exit /b 1
+if /i "%~1"=="display" goto display
 
 REM already running? (prevents a second copy)
 powershell -NoProfile -WindowStyle Hidden -Command "if (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*TatbusKiosk*' }) { exit 1 } else { exit 0 }"
 if errorlevel 1 exit /b 0
 
 del /q "%FLAGDIR%\\tatbus-exit*.flag" 2>nul
+REM customer screen on the second monitor (if there is one)
+start "" /b cmd /c ""%~f0" display"
 timeout /t 3 /nobreak >nul
 
 :loop
@@ -41,9 +45,28 @@ goto loop
 
 :managerexit
 del /q "%FLAGDIR%\\tatbus-exit*.flag" 2>nul
+REM close the customer screen too
+powershell -NoProfile -WindowStyle Hidden -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*tatbus-kiosk.bat*display*') -or ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*TatbusDisplay*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 REM full lock (register is the whole screen, no desktop): manager exit = sign out
 if /i "%~1"=="shell" shutdown /l
 exit /b 0
+
+REM ---------------- customer screen (second monitor) ----------------
+:display
+set DX=
+set DY=
+for /f "usebackq tokens=1,2" %%a in (\`powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $s = [System.Windows.Forms.Screen]::AllScreens | Where-Object { -not $_.Primary } | Select-Object -First 1; if ($s) { '' + $s.Bounds.X + ' ' + $s.Bounds.Y }"\`) do (
+  set DX=%%a
+  set DY=%%b
+)
+if not defined DX exit /b 0
+:dloop
+start "" /wait "%CHROME%" --kiosk "%DURL%" --user-data-dir="%LOCALAPPDATA%\\TatbusDisplay" --window-position=%DX%,%DY% --no-first-run --disable-session-crashed-bubble --disable-features=Translate --disable-pinch
+:dwait
+timeout /t 3 /nobreak >nul
+powershell -NoProfile -WindowStyle Hidden -Command "if (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*TatbusDisplay*' }) { exit 1 } else { exit 0 }"
+if errorlevel 1 goto dwait
+goto dloop
 `)
 }
 
@@ -113,7 +136,7 @@ exit /b 1
 const uninstallBat = crlf(`@echo off
 REM Removes the kiosk register from this Windows user.
 REM 1) stop the hidden launcher and the register window
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*TatbusKiosk-run*') -or ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*TatbusKiosk*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*TatbusKiosk-run*') -or ($_.Name -eq 'chrome.exe' -and ($_.CommandLine -like '*TatbusKiosk*' -or $_.CommandLine -like '*TatbusDisplay*')) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 set STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup
 del "%STARTUP%\\tatbus-start.vbs" 2>nul
 del "%STARTUP%\\tatbus-kiosk.bat" 2>nul
@@ -222,6 +245,9 @@ foreach ($u in $sel) {
     New-Item -Path "$gc\URLAllowlist" -Force | Out-Null
     $i = 1
     foreach ($h in @('${appHost}', 'supabase.co', 'matara.pro', 'nedarimplus.co.il', 'blob:*', 'data:*')) { New-ItemProperty -Path "$gc\URLAllowlist" -Name "$i" -Value $h -PropertyType String -Force | Out-Null; $i++ }
+    # the small customer display (USB/COM) works without asking
+    New-Item -Path "$gc\SerialAllowAllPortsForUrls" -Force | Out-Null
+    New-ItemProperty -Path "$gc\SerialAllowAllPortsForUrls" -Name '1' -Value 'https://${appHost}' -PropertyType String -Force | Out-Null
     foreach ($kv in @(@('IncognitoModeAvailability', 1), @('DeveloperToolsAvailability', 2), @('BrowserAddPersonEnabled', 0), @('BrowserGuestModeEnabled', 0), @('PasswordManagerEnabled', 0), @('PromptForDownloadLocation', 0))) {
       New-ItemProperty -Path $gc -Name $kv[0] -Value $kv[1] -PropertyType DWord -Force | Out-Null
     }

@@ -189,16 +189,23 @@ export function useBarcodeScanner(onCode, enabled = true) {
     if (!enabled) return
     let buf = ''
     let last = 0
+    let timer = null
+    const fire = () => {
+      clearTimeout(timer)
+      const code = buf
+      buf = ''
+      if (code.length >= 3) ref.current(code)
+    }
     const h = (e) => {
       const t = e.target
       const tag = t?.tagName
       const inField = (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && !t.dataset?.scan
       if (inField) return
-      const now = performance.now()
-      if (e.key === 'Enter') {
+      const now = e.timeStamp || performance.now()
+      if (e.key === 'Enter' || e.key === 'Tab') {
         if (buf.length >= 3) {
           e.preventDefault()
-          ref.current(buf)
+          fire()
         }
         buf = ''
         return
@@ -207,10 +214,66 @@ export function useBarcodeScanner(onCode, enabled = true) {
       if (now - last > 80) buf = ''
       buf += e.key
       last = now
+      // סורק בלי Enter בסוף: אחרי הפסקה קצרה מסיימים את הסריקה לבד
+      clearTimeout(timer)
+      if (buf.length >= 6) timer = setTimeout(fire, 150)
     }
     window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('keydown', h)
+    }
   }, [enabled])
+}
+
+/**
+ * סריקה לתוך שדה טקסט (שדה החיפוש בקופה).
+ * מזהה הקלדה מהירה של סורק, מוציא את הברקוד מהשדה ומחזיר את השדה למצבו הקודם —
+ * כך כל סריקה עומדת בפני עצמה, גם אם הסורק לא שולח Enter, וגם אם הברקוד לא נמצא.
+ */
+export function useScanField(value, setValue, onCode) {
+  const st = useRef({ base: '', len: 0, last: 0, timer: null, prev: '' })
+  const cb = useRef(onCode)
+  cb.current = onCode
+  st.current.prev = value
+  useEffect(() => () => clearTimeout(st.current.timer), [])
+  const finish = () => {
+    const s = st.current
+    clearTimeout(s.timer)
+    if (s.len < 6) return false
+    const code = s.prev.slice(s.base.length).trim()
+    setValue(s.base)
+    s.len = 0
+    if (code) cb.current(code)
+    return true
+  }
+  return {
+    onChange(e) {
+      const s = st.current
+      const v = e.target.value
+      // זמן ההקשה האמיתי (לא זמן הטיפול) — כדי שציור המסך לא ישבש את הזיהוי
+      const now = e.nativeEvent?.timeStamp || e.timeStamp || performance.now()
+      if (now - s.last < 60 && v.length === s.prev.length + 1 && v.startsWith(s.prev)) s.len++
+      else {
+        s.base = s.prev
+        s.len = v.length === s.prev.length + 1 && v.startsWith(s.prev) ? 1 : 0
+      }
+      s.last = now
+      s.prev = v
+      setValue(v)
+      clearTimeout(s.timer)
+      if (s.len >= 6) s.timer = setTimeout(finish, 150)
+    },
+    // מחזיר true אם המקש היה סוף של סריקה
+    onKeyDown(e) {
+      const now = e.nativeEvent?.timeStamp || e.timeStamp || performance.now()
+      if ((e.key === 'Enter' || e.key === 'Tab') && st.current.len >= 6 && now - st.current.last < 300) {
+        e.preventDefault()
+        return finish()
+      }
+      return false
+    },
+  }
 }
 
 /** סריקה במצלמה (Chrome באנדרואיד תומך ב-BarcodeDetector) */

@@ -73,11 +73,16 @@ export function NedarimFrame({ amount, test = false, prepare, onDone, onFail, as
 
   async function pay() {
     if (phase !== 'ready') return
+    const ph = phone.replace(/\D/g, '').replace(/^972/, '0')
+    if (askPayer && !/^0\d{8,9}$/.test(ph)) {
+      setErr('חובה להקליד מספר טלפון תקין (לבירורים)')
+      return
+    }
     setErr('')
     setPhase('paying')
     try {
       // השרת מקים את העסקה בנדרים (הסכום ננעל שם) ומחזיר מזהה — לאייפרם נשלח רק המזהה
-      const { paymentId, txId } = await prepare({ name: name.trim(), phone: phone.replace(/\D/g, '') })
+      const { paymentId, txId } = await prepare({ name: name.trim(), phone: ph })
       if (!txId) throw new Error('לא התקבל מזהה עסקה מהשרת')
       pending.current = paymentId
       post({ Name: 'FinishTransaction', Value: txId })
@@ -93,7 +98,7 @@ export function NedarimFrame({ amount, test = false, prepare, onDone, onFail, as
       {askPayer && phase !== 'done' && (
         <div className="row gap-s">
           <input placeholder="שם בעל הכרטיס (לא חובה)" value={name} onChange={(e) => setName(e.target.value)} />
-          <input placeholder="טלפון (לא חובה)" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <input placeholder="טלפון * (חובה, לבירורים)" inputMode="tel" dir="ltr" required value={phone} onChange={(e) => setPhone(e.target.value)} />
         </div>
       )}
       {test && (

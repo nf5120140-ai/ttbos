@@ -2,7 +2,7 @@
 // תתבוס — ייבוא / ייצוא מוצרים באקסל
 // ============================================================
 import { useMemo, useState } from 'react'
-import { list, saveMany, stockOf, uid, nowIso, deviceId } from './db.js'
+import { list, saveMany, stockOf, uid, nowIso, deviceId, productCodes, sameCode, normCode, splitCodes } from './db.js'
 import { Modal, Toggle, money, toast } from './ui.jsx'
 
 const loadXlsx = () => import('xlsx')
@@ -13,6 +13,7 @@ const FIELDS = [
   { key: 'price', label: 'מחיר מכירה', required: true, alias: ['מחיר', 'מחיר מכירה', 'מחיר לצרכן', 'price', 'sale price'] },
   { key: 'category', label: 'קטגוריה', alias: ['קטגוריה', 'קבוצה', 'מחלקה', 'סוג', 'category', 'group'] },
   { key: 'barcode', label: 'ברקוד', alias: ['ברקוד', 'מק"ט', 'מקט', 'קוד', 'barcode', 'sku', 'code', 'ean'] },
+  { key: 'barcodes', label: 'ברקודים נוספים', alias: ['ברקודים נוספים', 'ברקוד נוסף', 'ברקודים', 'barcodes', 'extra barcodes'] },
   { key: 'staffPrice', label: 'מחיר מוכרים', alias: ['מחיר מוכרים', 'מחיר עובד', 'מחיר צוות', 'staff price'] },
   { key: 'cost', label: 'מחיר עלות', alias: ['עלות', 'מחיר עלות', 'מחיר קנייה', 'קנייה', 'cost'] },
   { key: 'stock', label: 'מלאי', alias: ['מלאי', 'כמות', 'כמות במלאי', 'stock', 'qty', 'quantity'] },
@@ -45,6 +46,7 @@ export async function exportProducts() {
       'מחיר מוכרים': p.staffPrice ?? '',
       'מחיר עלות': p.cost ?? '',
       ברקוד: p.barcode || '',
+      'ברקודים נוספים': (p.barcodes || []).join(', '),
       מלאי: stockOf(p.id),
       'מלאי מינימום': p.minStock ?? '',
       'מלאי רצוי': p.parStock ?? '',
@@ -55,7 +57,7 @@ export async function exportProducts() {
 }
 
 function templateRow() {
-  return { 'שם מוצר': 'במבה', קטגוריה: 'חטיפים', 'מחיר מכירה': 5, 'מחיר מוכרים': 4, 'מחיר עלות': 2.5, ברקוד: '7290000066318', מלאי: 30, 'מלאי מינימום': 10, 'מלאי רצוי': 40, ספק: 'שטראוס' }
+  return { 'שם מוצר': 'במבה', קטגוריה: 'חטיפים', 'מחיר מכירה': 5, 'מחיר מוכרים': 4, 'מחיר עלות': 2.5, ברקוד: '7290000066318', 'ברקודים נוספים': '', מלאי: 30, 'מלאי מינימום': 10, 'מלאי רצוי': 40, ספק: 'שטראוס' }
 }
 
 function downloadSheet(XLSX, rows, filename) {
@@ -121,18 +123,22 @@ export function ImportProducts({ user, onClose }) {
   const analysis = useMemo(() => {
     if (!sheet) return null
     const existing = list('product')
-    const byBarcode = new Map(existing.filter((p) => p.barcode).map((p) => [String(p.barcode).trim(), p]))
+    const byBarcode = new Map()
+    for (const p of existing) for (const c of productCodes(p)) byBarcode.set(normCode(c), p)
     const byName = new Map(existing.map((p) => [norm(p.name), p]))
     const seen = new Set()
     const get = (r, k) => (map[k] != null ? r[map[k]] : '')
     return sheet.rows.map((r, i) => {
       const name = String(get(r, 'name') ?? '').trim()
-      const barcode = String(get(r, 'barcode') ?? '').trim().replace(/\.0+$/, '')
+      const codes = splitCodes(get(r, 'barcode'))
+      const barcode = codes[0] || ''
+      const barcodes = [...codes.slice(1), ...splitCodes(get(r, 'barcodes'))].filter((c, k, a) => a.findIndex((y) => sameCode(y, c)) === k && !sameCode(c, barcode))
       const price = num(get(r, 'price'))
       const row = {
         line: i + 1,
         name,
         barcode,
+        barcodes,
         price,
         category: String(get(r, 'category') ?? '').trim(),
         staffPrice: num(get(r, 'staffPrice')),
@@ -142,7 +148,7 @@ export function ImportProducts({ user, onClose }) {
         parStock: num(get(r, 'parStock')),
         supplier: String(get(r, 'supplier') ?? '').trim(),
       }
-      const match = (barcode && byBarcode.get(barcode)) || byName.get(norm(name))
+      const match = [barcode, ...barcodes].map((c) => c && byBarcode.get(normCode(c))).find(Boolean) || byName.get(norm(name))
       const key = barcode || norm(name)
       if (!name) return { ...row, status: 'error', why: 'חסר שם' }
       if (seen.has(key)) return { ...row, status: 'error', why: 'כפול בקובץ' }
@@ -188,6 +194,7 @@ export function ImportProducts({ user, onClose }) {
             staffPrice: r.staffPrice ?? '',
             cost: r.cost ?? '',
             barcode: r.barcode,
+            barcodes: r.barcodes,
             minStock: r.minStock ?? 5,
             parStock: r.parStock ?? 20,
             supplierId: supId(r.supplier),
@@ -205,7 +212,12 @@ export function ImportProducts({ user, onClose }) {
         if (r.category) patch.category = r.category
         if (r.staffPrice != null) patch.staffPrice = r.staffPrice
         if (r.cost != null) patch.cost = r.cost
-        if (r.barcode) patch.barcode = r.barcode
+        if (r.barcode && !p.barcode) patch.barcode = r.barcode
+        {
+          // מוסיפים ברקודים חדשים בלי למחוק קיימים
+          const all = [r.barcode, ...r.barcodes].filter((c) => c && !productCodes(patch).some((y) => sameCode(y, c)))
+          if (all.length) patch.barcodes = [...(p.barcodes || []), ...all]
+        }
         if (r.minStock != null) patch.minStock = r.minStock
         if (r.parStock != null) patch.parStock = r.parStock
         if (r.supplier) patch.supplierId = supId(r.supplier)
@@ -313,7 +325,10 @@ export function ImportProducts({ user, onClose }) {
                     </td>
                     <td>{r.staffPrice != null ? money(r.staffPrice) : ''}</td>
                     <td>{r.cost != null ? money(r.cost) : ''}</td>
-                    <td className="small">{r.barcode}</td>
+                    <td className="small">
+                      {r.barcode}
+                      {r.barcodes?.length ? ` +${r.barcodes.length}` : ''}
+                    </td>
                     <td>{r.stock ?? ''}</td>
                     <td className="small">{r.supplier}</td>
                   </tr>

@@ -5,7 +5,7 @@
 // שעובדים בלי אינטרנט במקביל לא דורסים זה את זה.
 // ============================================================
 
-export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice', 'promo']
+export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice', 'promo', 'device', 'kevent']
 
 // מצב הדגמה: ttbos.vercel.app/?demo — נתוני דוגמה, בלי שרת, במסד נפרד שלא נוגע בנתונים האמיתיים
 export const DEMO = (() => {
@@ -518,4 +518,29 @@ export function approvePaymentManually(paymentId, userId) {
 export function dismissPayment(paymentId, userId) {
   const p = data.payment.get(paymentId)
   if (p) save('payment', { ...p, status: 'dismissed', dismissedBy: userId })
+}
+
+// ---- ברקודים: למוצר יש ברקוד ראשי + ברקודים נוספים (למשל לכל מידה/טעם) ----
+export const normCode = (v) =>
+  String(v ?? '')
+    .trim()
+    .replace(/\.0+$/, '')
+    .replace(/[^0-9A-Za-z]/g, '')
+    .replace(/^0+(?=\d)/, '')
+    .toUpperCase()
+export function sameCode(a, b) {
+  const x = normCode(a)
+  return !!x && x === normCode(b)
+}
+export function productCodes(p) {
+  return [p?.barcode, ...(Array.isArray(p?.barcodes) ? p.barcodes : [])].map((c) => String(c ?? '').trim()).filter(Boolean)
+}
+export function productHasCode(p, code) {
+  return productCodes(p).some((c) => sameCode(c, code))
+}
+export function splitCodes(v) {
+  return String(v ?? '')
+    .split(/[\s,;|]+/)
+    .map((x) => x.trim().replace(/\.0+$/, ''))
+    .filter(Boolean)
 }
