@@ -599,7 +599,7 @@ function Settings({ user, sync }) {
         <div className="card">
           <div className="row space">
             <h3>מוכרים ומשתמשים</h3>
-            <button className="btn primary" onClick={() => setEdit({ role: 'seller', active: true, staffDiscountPct: 0, perms: { void: true, topup: true, terminal: true, reports: false } })}>
+            <button className="btn primary" onClick={() => setEdit({ role: 'seller', active: true, staffDiscountPct: 0, perms: { void: true, topup: true, terminal: true, drawer: true, reports: false } })}>
               + מוכר
             </button>
           </div>
@@ -746,6 +746,7 @@ function UserEditor({ u, me, onClose }) {
           <Toggle checked={f.perms.void} onChange={setPerm('void')} label="מותר לבטל / למחוק מכירות" />
           <Toggle checked={f.perms.topup} onChange={setPerm('topup')} label="מותר לטעון ארנקים" />
           <Toggle checked={f.perms.terminal !== false} onChange={setPerm('terminal')} label="מותר לרשום אשראי במסופון" />
+          <Toggle checked={f.perms.drawer !== false} onChange={setPerm('drawer')} label="מותר לפתוח מגירה בלי מכירה (נרשם בדוחות)" />
           <Toggle checked={f.perms.reports} onChange={setPerm('reports')} label="רואה דוחות" />
         </>
       )}
@@ -908,6 +909,7 @@ function KioskSettings() {
   const [perm, setPerm] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const st = kioskStatus()
   const events = list('kevent')
+    .filter((e) => e.type !== 'drawer')
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
     .slice(0, 15)
   const ago = (iso) => {
@@ -1220,6 +1222,14 @@ function DrawerSettings() {
                 ))}
               </select>
             </Field>
+            <Field label="שיטת פתיחה">
+              <select value={c.method || 'escpos'} onChange={(e) => upd({ method: e.target.value })}>
+                <option value="escpos">פקודת מדפסת (ESC/POS)</option>
+                <option value="byte">שליחת תו ליציאה</option>
+                <option value="dtr">פולס DTR</option>
+                <option value="rts">פולס RTS</option>
+              </select>
+            </Field>
             <Field label="פין">
               <select value={c.pin} onChange={(e) => upd({ pin: Number(e.target.value) })}>
                 <option value={0}>פין 2 (ברירת מחדל)</option>
@@ -1228,7 +1238,7 @@ function DrawerSettings() {
             </Field>
           </div>
           <p className="muted small">
-            ב"חבר מגירה" בוחרים את היציאה של המדפסת או של המגירה. אם המגירה לא נפתחת — מנסים פין 5 או מהירות אחרת.
+            ב"חבר מגירה" בוחרים את היציאה של המדפסת או של המגירה (במחשב קופה עם שקע CD — היציאה של המגירה מופיעה בדרך כלל כ-COM). אם המגירה לא נפתחת — מנסים שיטת פתיחה אחרת, פין 5 או מהירות אחרת, ולוחצים "פתח לבדיקה" אחרי כל שינוי.
           </p>
         </>
       )}

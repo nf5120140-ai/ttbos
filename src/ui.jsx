@@ -27,6 +27,7 @@ export function can(user, perm) {
   if (!user) return false
   if (user.role === 'manager') return true
   if (perm === 'terminal') return user.perms?.terminal !== false // אשראי במסופון — פתוח כברירת מחדל
+  if (perm === 'drawer') return user.perms?.drawer !== false // פתיחת מגירה ידנית — פתוח כברירת מחדל (נרשם בדוחות)
   return !!user.perms?.[perm]
 }
 

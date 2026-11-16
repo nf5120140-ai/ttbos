@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { publishDisplay, listenHello } from './display.js'
-import { openDrawer } from './drawer.js'
+import { openDrawer, openDrawerManual, drawerCfg } from './drawer.js'
 import { list, get, getSetting, sameCode, productHasCode, productCodes, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
 import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
 import { VerifyStaffModal, staffMethodLabel } from './Staff.jsx'
@@ -400,6 +400,17 @@ export default function Pos({ user }) {
             <button className="btn small grow" onClick={() => setRecent(true)}>
               🧾 מכירות אחרונות
             </button>
+            {drawerCfg().enabled && can(user, 'drawer') && (
+              <button
+                className="btn small grow"
+                onClick={async () => {
+                  const ok = await openDrawerManual(user)
+                  toast(ok ? '🔓 המגירה נפתחה (נרשם)' : 'לא הצלחתי לפתוח את המגירה — בדוק בהגדרות', ok ? undefined : 'err')
+                }}
+              >
+                🔓 פתח מגירה
+              </button>
+            )}
           </div>
         </div>
       </section>

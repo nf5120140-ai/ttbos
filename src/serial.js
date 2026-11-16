@@ -84,6 +84,22 @@ export function makeSerialDevice(key, defaults) {
       await open(p)
       return true
     },
+    /** פולס חשמלי על קו DTR או RTS (יש מגירות שמחוברות כך ישירות למחשב) */
+    pulse(signal = 'dataTerminalReady', ms = 200) {
+      queue = queue.then(async () => {
+        if (!(await ensure())) return false
+        try {
+          await port.setSignals({ [signal]: true })
+          await new Promise((r) => setTimeout(r, ms))
+          await port.setSignals({ [signal]: false })
+          return true
+        } catch {
+          await close()
+          return false
+        }
+      })
+      return queue
+    },
     write(bytes) {
       queue = queue.then(async () => {
         if (!(await ensure())) return false
