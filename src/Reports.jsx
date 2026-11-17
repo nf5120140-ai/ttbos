@@ -150,12 +150,13 @@ export function Reports({ user }) {
     for (const p of list('product').filter((p) => p.active !== false)) byProd.set(p.id, { id: p.id, name: p.name, qty: 0, total: 0, profit: 0 })
     for (const s of ok)
       for (const i of s.items) {
-        const x = byProd.get(i.productId) || { id: i.productId, name: i.name, qty: 0, total: 0, profit: 0 }
+        const key = i.general ? 'general' : i.productId
+        const x = byProd.get(key) || { id: key, name: i.general ? '✏️ פריט כללי' : i.name, qty: 0, total: 0, profit: 0 }
         const f = 1 - (s.discountPct || 0) / 100
         x.qty += i.qty
         x.total += i.qty * i.price * f
         x.profit += i.qty * (i.price * f - (i.cost || 0))
-        byProd.set(i.productId, x)
+        byProd.set(key, x)
       }
     const prods = [...byProd.values()].sort((a, b) => b.qty - a.qty)
 

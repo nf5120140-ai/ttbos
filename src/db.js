@@ -335,7 +335,7 @@ export function buildSale({ items, customerId, payment, discountPct, sellerId, s
       },
     ],
   ]
-  for (const it of items) ops.push(['stock', { id: uid(), productId: it.productId, qty: -it.qty, reason: 'sale', ref: saleId, userId: sellerId, createdAt: now }])
+  for (const it of items) if (!it.general) ops.push(['stock', { id: uid(), productId: it.productId, qty: -it.qty, reason: 'sale', ref: saleId, userId: sellerId, createdAt: now }])
   if (payment === 'wallet' && customerId)
     ops.push(['wallet', { id: uid(), customerId, amount: -total, type: 'purchase', ref: saleId, userId: sellerId, createdAt: now }])
   return { id: saleId, total, ops }
@@ -351,7 +351,7 @@ export function sell(args) {
 export function voidSale(sale, userId, reason = '') {
   if (sale.voided) return
   const ops = [['sale', { ...sale, voided: { by: userId, at: nowIso(), reason } }]]
-  for (const it of sale.items) ops.push(['stock', { productId: it.productId, qty: it.qty, reason: 'void', ref: sale.id, userId }])
+  for (const it of sale.items) if (!it.general) ops.push(['stock', { productId: it.productId, qty: it.qty, reason: 'void', ref: sale.id, userId }])
   if (sale.payment === 'wallet' && sale.customerId)
     ops.push(['wallet', { customerId: sale.customerId, amount: sale.total, type: 'refund', ref: sale.id, userId }])
   saveMany(ops)

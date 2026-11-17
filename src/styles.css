@@ -1909,3 +1909,8 @@ body.cd-body { margin: 0; background: #0f2a22; overflow: hidden; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; background: #eef2f7; border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 13px; direction: ltr; }
 .chip .icon-btn { padding: 0 6px; min-height: 0; }
+
+/* פריט כללי */
+.gen-amt { font-size: 40px; font-weight: 800; text-align: center; padding: 8px; background: #f4f6f8; border-radius: 12px; margin-bottom: 8px; }
+.gen-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.gen-pad .btn { font-size: 24px; padding: 14px 0; }
