@@ -10,6 +10,7 @@ import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHo
 import Pos from './Pos.jsx'
 import CustomerDisplay from './CustomerDisplay.jsx'
 import { IS_DISPLAY, regId } from './display.js'
+import { listMembers, addMember, removeMember } from './members.js'
 import { vfdCfg, setVfdCfg, vfdPick, vfdTest, vfdSupported } from './vfd.js'
 import { drawerCfg, setDrawerCfg, drawerPick, openDrawer, drawerSupported, scanDrawer } from './drawer.js'
 import { Customers, Inventory, Orders } from './Manage.jsx'
@@ -592,6 +593,7 @@ function Settings({ user, sync }) {
       {isMgr && <KioskSettings />}
 
       {isMgr && <GeneralSettings />}
+      {isMgr && cloudConfigured && <MembersSettings />}
 
       {isMgr && <NedarimSettings mode={sync.mode} />}
 
@@ -1257,6 +1259,103 @@ function DrawerSettings() {
           </p>
         </>
       )}
+    </div>
+  )
+}
+
+// 👥 מיילים עם גישה למערכת — מנהל פותח מייל חדש / מסיר גישה
+function MembersSettings() {
+  const [rows, setRows] = useState(null)
+  const [err, setErr] = useState('')
+  const [email, setEmail] = useState('')
+  const [pass, setPass] = useState('')
+  const [busy, setBusy] = useState(false)
+  const load = () =>
+    listMembers()
+      .then((r) => {
+        setRows(r)
+        setErr('')
+      })
+      .catch((e) => setErr(e.message))
+  useEffect(() => {
+    load()
+  }, [])
+  const add = async () => {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return toast('כתובת מייל לא תקינה', 'err')
+    if (pass && pass.length < 6) return toast('הסיסמה חייבת להיות לפחות 6 תווים', 'err')
+    setBusy(true)
+    try {
+      const st = await addMember(email, pass)
+      toast(
+        st === 'created'
+          ? '✓ המייל נפתח — אפשר להיכנס איתו עם הסיסמה שבחרת'
+          : st === 'member'
+            ? '✓ המייל כבר היה רשום — קיבל גישה'
+            : '✓ אושר — ברגע שיירשם עם המייל הזה יקבל גישה'
+      )
+      setEmail('')
+      setPass('')
+      load()
+    } catch (e) {
+      toast(e.message, 'err')
+    }
+    setBusy(false)
+  }
+  return (
+    <div className="card">
+      <h3>👥 מיילים עם גישה לניהול</h3>
+      <p className="muted small">
+        כל מייל ברשימה יכול להתחבר לקופה מכל מחשב או טלפון ולראות את כל הנתונים. (קוד המוכר/מנהל בתוך הקופה — בנפרד, בטבלת המשתמשים.)
+      </p>
+      {err ? (
+        <p className="small" style={{ color: '#b42318' }}>
+          {err}
+        </p>
+      ) : !rows ? (
+        <p className="muted small">טוען…</p>
+      ) : (
+        <table>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.email}>
+                <td dir="ltr" style={{ textAlign: 'right' }}>
+                  {r.email}
+                </td>
+                <td className="small">{r.status === 'invite' ? '⏳ ממתין להרשמה' : r.is_me ? '✓ אתה' : '✓ פעיל'}</td>
+                <td>
+                  {!r.is_me && (
+                    <button
+                      className="btn small danger"
+                      onClick={async () => {
+                        if (!(await confirmDlg(`להסיר את הגישה של ${r.email}?`, 'הסר'))) return
+                        try {
+                          await removeMember(r.email)
+                          toast('הגישה הוסרה')
+                          load()
+                        } catch (e) {
+                          toast(e.message, 'err')
+                        }
+                      }}
+                    >
+                      הסר
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="row gap-s wrap" style={{ marginTop: 10 }}>
+        <input dir="ltr" type="email" placeholder="מייל חדש" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input dir="ltr" type="text" placeholder="סיסמה (6 תווים לפחות)" value={pass} onChange={(e) => setPass(e.target.value)} />
+        <button className="btn primary" disabled={busy || !!err} onClick={add}>
+          {busy ? '…' : '+ פתח מייל'}
+        </button>
+      </div>
+      <p className="muted small">
+        בלי סיסמה — המייל רק מאושר, והאדם נרשם בעצמו בכניסה הראשונה. אם המייל כבר רשום — הוא פשוט מקבל גישה.
+      </p>
     </div>
   )
 }
