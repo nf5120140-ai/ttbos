@@ -143,7 +143,7 @@ function KioskApp() {
       {sync.store?.acting && (
         <div className="acting-bar">
           🛠 אתה בתוך החנות <b>{sync.store.name}</b> כמנהל מערכת
-          <button className="btn small" onClick={() => adminEnterStore(null).catch((e) => toast(e.message, 'err'))}>
+          <button className="btn small" onClick={() => enterStore(null)}>
             יציאה לרשימת החנויות
           </button>
         </div>
@@ -1432,8 +1432,8 @@ function SuperConsole({ sync }) {
           <span>תתבוס — ניהול מערכת</span>
         </div>
         <div className="top-end">
-          <span className="muted small" dir="ltr">{sync.email}</span>
-          <button className="btn small" onClick={() => cloudLogout()}>
+          <span className="small" dir="ltr" style={{ opacity: 0.8 }}>{sync.email}</span>
+          <button className="btn small" style={{ color: '#1d2433' }} onClick={() => cloudLogout()}>
             התנתק
           </button>
         </div>
@@ -1447,6 +1447,22 @@ function SuperConsole({ sync }) {
       <ConfirmHost />
     </div>
   )
+}
+
+// כניסה/יציאה מחנות. שינויים מקומיים שלא נשלחו (למשל ממכשיר שהיה מחובר לחנות אחרת) — שואלים לפני שמוחקים
+async function enterStore(id) {
+  try {
+    await adminEnterStore(id)
+  } catch (e) {
+    if (!e.unsynced) return toast(e.message, 'err')
+    const ok = await confirmDlg(
+      `במכשיר הזה יש ${e.unsynced} שינויים מקומיים שלא נשלחו לשרת (מהחנות שהמכשיר היה מחובר אליה קודם). הם יימחקו מהמכשיר — להמשיך?`,
+      'המשך',
+      'ביטול',
+      'primary'
+    )
+    if (ok) adminEnterStore(id, true).catch((x) => toast(x.message, 'err'))
+  }
 }
 
 const STATUS_LABEL = { pending: '⏳ ממתין לאישור', active: '✓ פעיל', blocked: '⛔ חסום' }
@@ -1544,7 +1560,7 @@ function StoresAdmin() {
                 className="btn small"
                 onClick={async () =>
                   (await confirmDlg(`להיכנס לנתונים של "${r.name}"? הנתונים של החנות הנוכחית במכשיר הזה יוחלפו (הם שמורים בשרת).`, 'היכנס', 'ביטול', 'primary')) &&
-                  adminEnterStore(r.id).catch((e) => toast(e.message, 'err'))
+                  enterStore(r.id)
                 }
               >
                 🔎 היכנס לנתונים

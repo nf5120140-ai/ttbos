@@ -198,9 +198,13 @@ export async function checkMember() {
 }
 
 /** מנהל-על: כניסה לנתונים של חנות (null = יציאה). שומר קודם את מה שלא נשלח */
-export async function adminEnterStore(storeId) {
+export async function adminEnterStore(storeId, force = false) {
   await syncNow()
-  if (outboxSize() > 0) throw new Error('יש שינויים שעוד לא נשלחו לשרת — בדוק חיבור לאינטרנט ונסה שוב')
+  if (outboxSize() > 0 && !force) {
+    const e = new Error('יש שינויים שעוד לא נשלחו לשרת — בדוק חיבור לאינטרנט ונסה שוב')
+    e.unsynced = outboxSize()
+    throw e
+  }
   const { error } = await sb.rpc('tt_admin_enter', { p_store: storeId })
   if (error) throw new Error(error.message)
   await resetLocalData()
