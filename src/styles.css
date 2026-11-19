@@ -1914,3 +1914,11 @@ body.cd-body { margin: 0; background: #0f2a22; overflow: hidden; }
 .gen-amt { font-size: 40px; font-weight: 800; text-align: center; padding: 8px; background: #f4f6f8; border-radius: 12px; margin-bottom: 8px; }
 .gen-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .gen-pad .btn { font-size: 24px; padding: 14px 0; }
+
+/* כמה חנויות */
+.acting-bar { background: #fff4d6; border-bottom: 1px solid #f0d58a; padding: 6px 12px; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.store-row { border: 1px solid #e3e7ee; border-radius: 12px; padding: 10px; margin: 8px 0; display: flex; flex-direction: column; gap: 8px; }
+.store-row.pending { border-color: #f0b429; background: #fffaf0; }
+.store-row.blocked { opacity: .7; background: #f8f8f8; }
+.store-mails { border-top: 1px dashed #dde; padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.badge-warn { background: #f0b429; color: #3d2a00; border-radius: 999px; padding: 1px 8px; font-size: 13px; margin-inline-start: 6px; }

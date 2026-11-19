@@ -8,6 +8,7 @@ const errText = (e) => {
   if (/not allowed/.test(m)) return 'אין הרשאה'
   if (/bad email/.test(m)) return 'כתובת מייל לא תקינה'
   if (/cannot remove yourself/.test(m)) return 'אי אפשר להסיר את המייל שאתה מחובר איתו'
+  if (/belongs to another store/.test(m)) return 'המייל הזה כבר שייך לחנות אחרת'
   if (/already registered|already been registered/i.test(m)) return 'already'
   if (/Password should be|password/i.test(m)) return 'הסיסמה חייבת להיות לפחות 6 תווים'
   if (/fetch/i.test(m)) return 'אין חיבור לאינטרנט'

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { DEMO, initDb, list, getSetting, setSetting, get, save, saveMany, hashPin, ensureDefaultManager, deviceName, setDeviceName, wipeLocal, KINDS } from './db.js'
-import { startSync, syncNow, cloudConfigured, cloudLogin, cloudSignup, cloudResetPassword, cloudSetPassword, cloudLogout, setCloudConfig, nedarimFnUrl } from './sync.js'
+import { startSync, syncNow, cloudConfigured, cloudLogin, cloudSignup, cloudResetPassword, cloudSetPassword, cloudLogout, setCloudConfig, nedarimFnUrl, sb, adminEnterStore, sendPasswordReset } from './sync.js'
 import { ParentTopup } from './Credit.jsx'
 import { useFingerprint, fpIdentify, fpEnroll } from './fp.js'
 import { downloadKioskZip } from './kioskFiles.js'
 import { managerExit, isKioskDevice, startKioskMode, setKioskSeller, useKioskAlerts, kioskStatus, askNotifyPermission, setKioskDevice, STALE_MIN } from './kiosk.js'
 import { seedDemo } from './seed.js'
-import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime } from './ui.jsx'
+import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHost, Modal, Field, Toggle, downloadFile, fmtTime, fmtDT } from './ui.jsx'
 import Pos from './Pos.jsx'
 import CustomerDisplay from './CustomerDisplay.jsx'
 import { IS_DISPLAY, regId } from './display.js'
@@ -85,6 +85,11 @@ function KioskApp() {
 
   // ענן מוגדר אבל המכשיר לא מחובר — חיבור חד-פעמי למכשיר
   if (cloudConfigured && sync.recovery) return <SetNewPassword />
+  // כמה חנויות: חנות שממתינה / חסומה, או מנהל-על שלא נכנס לחנות
+  if (cloudConfigured && sync.authed && sync.member === false && sync.store) {
+    if (sync.store.is_super) return <SuperConsole sync={sync} />
+    if (sync.store.status === 'pending' || sync.store.status === 'blocked') return <StoreWaiting store={sync.store} email={sync.email} />
+  }
   if (cloudConfigured && (!sync.authed || sync.member === false)) return <CloudGate notMember={sync.authed && sync.member === false} email={sync.email} />
   if (cloudConfigured && sync.member === null) return <div className="splash">מתחבר…</div>
   if (cloudConfigured && !sync.pulledOnce && list('user').length === 0) return (
@@ -98,7 +103,7 @@ function KioskApp() {
       </div>
     )
 
-  if (!user) return <SellerLogin onLogin={(u) => (setUser(u), setTab('pos'))} />
+  if (!user) return <SellerLogin onLogin={(u) => (setUser(u), setTab('pos'))} acting={!!sync.store?.acting} />
 
   const fresh = get('user', user.id) || user
   const tabs = [
@@ -135,6 +140,14 @@ function KioskApp() {
         </div>
       </header>
       {kiosk.alerts.length > 0 && <KioskAlertBar alerts={kiosk.alerts} onOpen={() => setTab('settings')} />}
+      {sync.store?.acting && (
+        <div className="acting-bar">
+          🛠 אתה בתוך החנות <b>{sync.store.name}</b> כמנהל מערכת
+          <button className="btn small" onClick={() => adminEnterStore(null).catch((e) => toast(e.message, 'err'))}>
+            יציאה לרשימת החנויות
+          </button>
+        </div>
+      )}
       <main>
         {tab === 'pos' && <Pos user={fresh} />}
         {tab === 'customers' && <Customers user={fresh} />}
@@ -160,7 +173,7 @@ function SyncBadge({ s }) {
 }
 
 // ---------- כניסת מוכר ----------
-function SellerLogin({ onLogin }) {
+function SellerLogin({ onLogin, acting }) {
   useVersion()
   const users = list('user').filter((u) => u.active !== false)
   const [sel, setSel] = useState(users.length === 1 ? users[0] : null)
@@ -265,6 +278,11 @@ function SellerLogin({ onLogin }) {
               ))}
             </div>
             {onlyDefault && !DEMO && <p className="muted small">קוד ראשוני: 1234 — שנה אותו בהגדרות</p>}
+            {acting && (
+              <button className="btn" style={{ marginTop: 10 }} onClick={() => onLogin(SUPER_USER)}>
+                🛠 כניסה כמנהל מערכת
+              </button>
+            )}
           </>
         )}
       </div>
@@ -278,6 +296,8 @@ function CloudGate({ notMember, email: currentEmail }) {
   const [email, setEmail] = useState(() => localStorage.getItem('tt_email') || '')
   const [pw, setPw] = useState('')
   const [pw2, setPw2] = useState('')
+  const [storeName, setStoreName] = useState('')
+  const [phone, setPhone] = useState('')
   const [show, setShow] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -305,13 +325,12 @@ function CloudGate({ notMember, email: currentEmail }) {
     try {
       if (mode === 'login') {
         remember()
-        const ok = await cloudLogin(em, pw)
-        if (!ok) setErr('המייל הזה לא מחובר למזנון. היכנס עם המייל שנרשם בפעם הראשונה.')
+        await cloudLogin(em, pw)
       } else if (mode === 'signup') {
         if (pw.length < 6) throw new Error('סיסמה של 6 תווים לפחות')
         if (pw !== pw2) throw new Error('הסיסמאות לא זהות')
         remember()
-        const r = await cloudSignup(em, pw)
+        const r = await cloudSignup(em, pw, { store_name: storeName.trim(), phone: phone.trim() })
         if (r === 'exists') {
           setMode('login')
           setPw('')
@@ -338,7 +357,8 @@ function CloudGate({ notMember, email: currentEmail }) {
         <h1>תתבוס</h1>
         {notMember && (
           <div className="err">
-            המייל {currentEmail} לא מחובר למזנון.
+            המייל {currentEmail} לא שייך לאף חנות.
+            <br />
             <button type="button" className="btn small" onClick={() => cloudLogout()}>
               התנתק
             </button>
@@ -347,20 +367,27 @@ function CloudGate({ notMember, email: currentEmail }) {
 
         {mode === 'choose' && (
           <>
-            <p className="muted">כל המכשירים של המזנון נכנסים עם אותו מייל וסיסמה. עושים את זה פעם אחת בכל מכשיר.</p>
+            <p className="muted">כל המכשירים של החנות נכנסים עם אותו מייל וסיסמה. עושים את זה פעם אחת בכל מכשיר.</p>
             <button type="button" className="btn primary big" onClick={() => go('login')}>
               יש לי כבר חשבון — כניסה
             </button>
             <button type="button" className="btn big" onClick={() => go('signup')}>
-              פעם ראשונה — רישום המזנון
+              חנות חדשה — הרשמה
             </button>
           </>
         )}
 
         {mode !== 'choose' && (
           <>
-            <h3>{mode === 'login' ? 'כניסה' : mode === 'signup' ? 'רישום המזנון (פעם ראשונה בלבד)' : 'שכחתי סיסמה'}</h3>
-            {mode === 'signup' && <p className="muted small">בוחרים מייל וסיסמה. אחר כך בכל מכשיר נוסף נכנסים עם אותם פרטים.</p>}
+            <h3>{mode === 'login' ? 'כניסה' : mode === 'signup' ? 'הרשמת חנות חדשה' : 'שכחתי סיסמה'}</h3>
+            {mode === 'signup' && (
+              <>
+                <p className="muted small">אחרי ההרשמה החנות תיפתח לשימוש לאחר אישור. בכל מכשיר נוסף נכנסים עם אותו מייל וסיסמה.</p>
+                <input placeholder="שם החנות / המזנון" value={storeName} onChange={(e) => setStoreName(e.target.value)} />
+                <input placeholder="טלפון ליצירת קשר" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" dir="ltr" />
+                <p className="muted small">הוזמנת על ידי חנות קיימת? השאר את שם החנות ריק.</p>
+              </>
+            )}
             <input placeholder="מייל" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" dir="ltr" />
             {mode !== 'forgot' && (
               <div className="pw-wrap">
@@ -391,7 +418,7 @@ function CloudGate({ notMember, email: currentEmail }) {
               )}
               {mode !== 'signup' && (
                 <button type="button" className="link" onClick={() => go('signup')}>
-                  פעם ראשונה? רישום
+                  חנות חדשה? הרשמה
                 </button>
               )}
               {mode === 'login' && (
@@ -593,6 +620,7 @@ function Settings({ user, sync }) {
       {isMgr && <KioskSettings />}
 
       {isMgr && <GeneralSettings />}
+      {sync.store?.is_super && <StoresAdmin />}
       {isMgr && cloudConfigured && <MembersSettings />}
 
       {isMgr && <NedarimSettings mode={sync.mode} />}
@@ -1356,6 +1384,198 @@ function MembersSettings() {
       <p className="muted small">
         בלי סיסמה — המייל רק מאושר, והאדם נרשם בעצמו בכניסה הראשונה. אם המייל כבר רשום — הוא פשוט מקבל גישה.
       </p>
+    </div>
+  )
+}
+
+// ---------- כמה חנויות ----------
+const SUPER_USER = { id: 'super-admin', name: 'מנהל מערכת', role: 'manager', active: true, perms: { void: true, topup: true, terminal: true, drawer: true, reports: true } }
+
+function StoreWaiting({ store, email }) {
+  const pending = store.status === 'pending'
+  return (
+    <div className="login">
+      <div className="login-box">
+        <div className="login-logo">ת</div>
+        <h1>{store.name || 'תתבוס'}</h1>
+        {pending ? (
+          <>
+            <h3>⏳ החנות ממתינה לאישור</h3>
+            <p className="muted">ההרשמה התקבלה. ברגע שהחנות תאושר תוכל להתחיל לעבוד — אין צורך להירשם שוב.</p>
+          </>
+        ) : (
+          <>
+            <h3>⛔ החנות חסומה</h3>
+            <p className="muted">הגישה לחנות הזו הושהתה. לפרטים פנה למנהל המערכת.</p>
+          </>
+        )}
+        <p className="muted small" dir="ltr">{email}</p>
+        <button className="btn primary big" onClick={() => location.reload()}>
+          🔄 בדוק שוב
+        </button>
+        <button className="btn" onClick={() => cloudLogout()}>
+          התנתק
+        </button>
+      </div>
+      <ToastHost />
+    </div>
+  )
+}
+
+// מנהל-על בלי חנות: רק רשימת החנויות
+function SuperConsole({ sync }) {
+  return (
+    <div className="app">
+      <header className="top">
+        <div className="brand">
+          <span className="logo">ת</span>
+          <span>תתבוס — ניהול מערכת</span>
+        </div>
+        <div className="top-end">
+          <span className="muted small" dir="ltr">{sync.email}</span>
+          <button className="btn small" onClick={() => cloudLogout()}>
+            התנתק
+          </button>
+        </div>
+      </header>
+      <main>
+        <div className="settings">
+          <StoresAdmin />
+        </div>
+      </main>
+      <ToastHost />
+      <ConfirmHost />
+    </div>
+  )
+}
+
+const STATUS_LABEL = { pending: '⏳ ממתין לאישור', active: '✓ פעיל', blocked: '⛔ חסום' }
+
+function StoresAdmin() {
+  const [rows, setRows] = useState(null)
+  const [err, setErr] = useState('')
+  const [open, setOpen] = useState(null) // store id → רשימת מיילים
+  const [mails, setMails] = useState([])
+  const [q, setQ] = useState('')
+  const load = async () => {
+    const { data, error } = await sb.rpc('tt_admin_stores')
+    if (error) return setErr(/tt_admin_stores|Could not find/i.test(error.message) ? 'צריך להריץ את multi-store.sql ב-Supabase' : error.message)
+    setErr('')
+    setRows(data || [])
+  }
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, [])
+  const call = async (fn, args, okMsg) => {
+    const { error } = await sb.rpc(fn, args)
+    if (error) return toast(error.message, 'err')
+    if (okMsg) toast(okMsg)
+    load()
+  }
+  const showMails = async (id) => {
+    if (open === id) return setOpen(null)
+    setOpen(id)
+    setMails([])
+    const { data, error } = await sb.rpc('tt_admin_members', { p_store: id })
+    if (error) return toast(error.message, 'err')
+    setMails(data || [])
+  }
+  const reset = async (email) => {
+    if (!(await confirmDlg(`לשלוח ל-${email} מייל עם קישור לבחירת סיסמה חדשה?`, '📧 שלח', 'ביטול', 'primary'))) return
+    try {
+      await sendPasswordReset(email)
+      toast('✓ נשלח מייל שחזור ל-' + email)
+    } catch (e) {
+      toast(e.message, 'err')
+    }
+  }
+  const shown = (rows || []).filter((r) => !q || (r.name + ' ' + (r.owner_email || '') + ' ' + (r.phone || '')).toLowerCase().includes(q.toLowerCase()))
+  const pendingN = (rows || []).filter((r) => r.status === 'pending').length
+  return (
+    <div className="card">
+      <h3>
+        🏪 חנויות {rows ? `(${rows.length})` : ''} {pendingN > 0 && <span className="badge-warn">{pendingN} ממתינות לאישור</span>}
+      </h3>
+      {err && <p className="err small">{err}</p>}
+      {!rows && !err && <p className="muted small">טוען…</p>}
+      {rows && rows.length > 5 && <input placeholder="🔍 חיפוש חנות / מייל / טלפון" value={q} onChange={(e) => setQ(e.target.value)} />}
+      {shown.map((r) => (
+        <div key={r.id} className={'store-row ' + r.status}>
+          <div className="store-main">
+            <b>{r.name || '(בלי שם)'}</b> <span className="small">{STATUS_LABEL[r.status]}</span>
+            {r.is_mine && <span className="small"> · 🛠 אתה בתוכה</span>}
+            <div className="muted small">
+              <span dir="ltr">{r.owner_email}</span>
+              {r.phone ? ' · ' + r.phone : ''} · נרשמה {fmtDT(r.created_at)}
+            </div>
+            <div className="muted small">
+              {r.members} מיילים · {r.records} רשומות{r.last_activity ? ' · פעילות אחרונה ' + fmtDT(r.last_activity) : ''}
+            </div>
+          </div>
+          <div className="row gap-s wrap">
+            {r.status === 'pending' && (
+              <button className="btn small primary" onClick={() => call('tt_admin_set_status', { p_store: r.id, p_status: 'active' }, '✓ החנות אושרה')}>
+                ✓ אשר
+              </button>
+            )}
+            {r.status === 'active' && (
+              <button
+                className="btn small danger"
+                onClick={async () =>
+                  (await confirmDlg(`לחסום את "${r.name}"? הם לא יוכלו לעבוד עד שתבטל את החסימה.`, 'חסום')) &&
+                  call('tt_admin_set_status', { p_store: r.id, p_status: 'blocked' }, 'החנות נחסמה')
+                }
+              >
+                ⛔ חסום
+              </button>
+            )}
+            {r.status === 'blocked' && (
+              <button className="btn small" onClick={() => call('tt_admin_set_status', { p_store: r.id, p_status: 'active' }, '✓ החסימה בוטלה')}>
+                בטל חסימה
+              </button>
+            )}
+            <button className="btn small" onClick={() => showMails(r.id)}>
+              📧 מיילים
+            </button>
+            {!r.is_mine && (
+              <button
+                className="btn small"
+                onClick={async () =>
+                  (await confirmDlg(`להיכנס לנתונים של "${r.name}"? הנתונים של החנות הנוכחית במכשיר הזה יוחלפו (הם שמורים בשרת).`, 'היכנס', 'ביטול', 'primary')) &&
+                  adminEnterStore(r.id).catch((e) => toast(e.message, 'err'))
+                }
+              >
+                🔎 היכנס לנתונים
+              </button>
+            )}
+            <label className="chk small">
+              <input
+                type="checkbox"
+                checked={r.features?.invoice_scan === true}
+                onChange={(e) => call('tt_admin_set_feature', { p_store: r.id, p_key: 'invoice_scan', p_on: e.target.checked }, e.target.checked ? 'סריקת חשבוניות הופעלה' : 'סריקת חשבוניות כובתה')}
+              />
+              סריקת חשבוניות (עולה כסף)
+            </label>
+          </div>
+          {open === r.id && (
+            <div className="store-mails">
+              {!mails.length && <span className="muted small">טוען…</span>}
+              {mails.map((m) => (
+                <div key={m.email} className="row space gap-s">
+                  <span dir="ltr" className="small">
+                    {m.email} {m.is_owner ? '(בעלים)' : ''}
+                  </span>
+                  <button className="btn small" onClick={() => reset(m.email)}>
+                    📧 שלח שחזור סיסמה
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }

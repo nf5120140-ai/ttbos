@@ -3,9 +3,11 @@
 // שם הפונקציה ב-Supabase: nedarim
 // חובה לכבות "Verify JWT" (נדרים פלוס וההורים פונים בלי התחברות)
 //
-// סודות (Edge Functions → Secrets):
+// כמה חנויות: כל חנות עם מוסד נדרים משלה (בהגדרות החנות). החנות מזוהה לפי התשלום / הבחור.
+// סודות (Edge Functions → Secrets) — רק לחנות הראשית (features.env_secrets):
 //   NEDARIM_WEBHOOK_SECRET  — מומלץ. מפתח חתימת HMAC מנדרים (הגדרות > API > Webhook > חתימת HMAC)
 //   NEDARIM_API_PASSWORD    — לא חובה. npk_... לאימות כפול מול הסטוריית העסקאות
+// חנויות אחרות: webhookSecret / apiPassword בהגדרות נדרים של החנות (לא חובה)
 //
 // פעולות:
 //   POST {action:'info',      customerId}                     → שם הבחור + פרטי מוסד (לדף ההורים)
@@ -42,27 +44,58 @@ const clean = (s: unknown, max = 100) =>
     .replace(/[<>]/g, '')
     .slice(0, max)
 
-async function getRecord(kind: string, id: string) {
+// ---------- חנות ----------
+// ctx.sid = מזהה החנות (null = מבנה ישן עם חנות אחת), ctx.features = הרשאות החנות
+type Ctx = { sid: string | null; features: Record<string, any>; legacy: boolean }
+let multiStore: boolean | null = null
+async function isMultiStore() {
+  if (multiStore === null) {
+    const { error } = await db.from('tt_stores').select('id').limit(1)
+    multiStore = !error
+  }
+  return multiStore
+}
+
+/** מוצא לאיזו חנות שייכת רשומה (תשלום / בחור) ומוודא שהחנות פעילה */
+async function ctxFor(kind: string, id: string): Promise<Ctx | null> {
   if (!id) return null
-  const { data } = await db.from('tt_records').select('data,deleted').eq('kind', kind).eq('id', id).maybeSingle()
+  if (!(await isMultiStore())) return { sid: null, features: { env_secrets: true }, legacy: true }
+  const { data } = await db.from('tt_records').select('store_id').eq('kind', kind).eq('id', id).limit(2)
+  if (!data || data.length !== 1) return null
+  const { data: st } = await db.from('tt_stores').select('id,status,features').eq('id', data[0].store_id).maybeSingle()
+  if (!st) return null
+  if (st.status !== 'active') throw new Error('החנות לא פעילה')
+  return { sid: st.id, features: st.features || {}, legacy: false }
+}
+
+async function getRecord(ctx: Ctx, kind: string, id: string) {
+  if (!id) return null
+  let q = db.from('tt_records').select('data,deleted').eq('kind', kind).eq('id', id)
+  if (ctx.sid) q = q.eq('store_id', ctx.sid)
+  const { data } = await q.maybeSingle()
   if (!data || data.deleted) return null
   return data.data as Record<string, any>
 }
 
-async function putRecords(rows: Array<[string, Record<string, any>]>) {
+async function putRecords(ctx: Ctx, rows: Array<[string, Record<string, any>]>) {
   const now = nowIso()
   const payload = rows.map(([kind, obj]) => {
     const rec: Record<string, any> = { ...obj, kind, updatedAt: now, createdAt: obj.createdAt || now, device: obj.device || 'nedarim' }
-    return { kind, id: rec.id, data: rec, updated_at: now, deleted: !!rec.deleted, device: rec.device }
+    return { ...(ctx.sid ? { store_id: ctx.sid } : {}), kind, id: rec.id, data: rec, updated_at: now, deleted: !!rec.deleted, device: rec.device }
   })
-  const { error } = await db.from('tt_records').upsert(payload, { onConflict: 'kind,id' })
+  const { error } = await db.from('tt_records').upsert(payload, { onConflict: ctx.sid ? 'store_id,kind,id' : 'kind,id' })
   if (error) throw error
 }
 
+// סודות: החנות הראשית — מה-Secrets של Supabase; חנות אחרת — מההגדרות שלה
+function secretFor(ctx: Ctx, s: Record<string, any>, env: string, key: string) {
+  return String(s[key] || '') || (ctx.features.env_secrets ? Deno.env.get(env) || '' : '')
+}
+
 // ---------- הגדרות המוסד ----------
-async function settings() {
-  const s = (await getRecord('setting', 'nedarim')) || {}
-  const g = (await getRecord('setting', 'general')) || {}
+async function settings(ctx: Ctx) {
+  const s = (await getRecord(ctx, 'setting', 'nedarim')) || {}
+  const g = (await getRecord(ctx, 'setting', 'general')) || {}
   const test = !!s.testMode
   const mosad = test ? TEST_MOSAD : String(s.mosad || '')
   const apiValid = test ? TEST_APIVALID : String(s.apiValid || '')
@@ -72,8 +105,8 @@ async function settings() {
 }
 
 // ---------- הקמת עסקה בנדרים (הסכום ננעל כאן) ----------
-async function createNedarimTx(_req: Request, p: Record<string, any>, payer: { name?: string; phone?: string } = {}) {
-  const st = await settings()
+async function createNedarimTx(ctx: Ctx, p: Record<string, any>, payer: { name?: string; phone?: string } = {}) {
+  const st = await settings(ctx)
   // הכתובת הציבורית של הפונקציה (req.url בתוך Supabase הוא כתובת פנימית)
   const base = (Deno.env.get('SUPABASE_URL') || '').replace(/\/$/, '')
   const cb = `${base}/functions/v1/nedarim?cb=1&pid=${encodeURIComponent(p.id)}`
@@ -107,7 +140,7 @@ async function createNedarimTx(_req: Request, p: Record<string, any>, payer: { n
     throw new Error('תשובה לא צפויה מנדרים: ' + text.slice(0, 120))
   }
   if (out.Status !== 'OK' || !out.ID) throw new Error(out.Message || 'נדרים לא הקימו את העסקה')
-  await putRecords([['payment', { ...p, createId: String(out.ID), test: st.test, createdTxAt: nowIso() }]])
+  await putRecords(ctx, [['payment', { ...p, createId: String(out.ID), test: st.test, createdTxAt: nowIso() }]])
   return { ID: String(out.ID), Key: out.Key || '', test: st.test }
 }
 
@@ -132,9 +165,8 @@ function safeEqual(a: string, b: string) {
 }
 
 /** מחזיר רשימת בעיות (ריקה = מקור מאומת) */
-async function verifyOrigin(req: Request, raw: string) {
+async function verifyOrigin(req: Request, raw: string, secret: string) {
   const problems: string[] = []
-  const secret = Deno.env.get('NEDARIM_WEBHOOK_SECRET')
   const ip = clientIp(req)
   if (secret) {
     const ts = req.headers.get('x-nedarim-timestamp') || ''
@@ -152,8 +184,7 @@ async function verifyOrigin(req: Request, raw: string) {
 }
 
 // אימות כפול מול הסטוריית העסקאות (רק אם הוגדר NEDARIM_API_PASSWORD)
-async function verifyWithHistory(mosad: string, historyId: string, amount: number) {
-  const apiPassword = Deno.env.get('NEDARIM_API_PASSWORD')
+async function verifyWithHistory(mosad: string, apiPassword: string, historyId: string, amount: number) {
   if (!apiPassword || !mosad || !/^\d+$/.test(historyId)) return null
   const url = new URL('https://matara.pro/nedarimplus/Reports/Manage3.aspx')
   url.searchParams.set('Action', 'GetHistoryJson')
@@ -182,20 +213,23 @@ function findPaymentId(url: URL, body: Record<string, any>) {
 async function handleCallback(req: Request, raw: string, body: Record<string, any>) {
   const url = new URL(req.url)
   const viaOurCallback = url.searchParams.has('pid')
-  const { problems, ip } = await verifyOrigin(req, raw)
   const paymentId = findPaymentId(url, body)
-  const p = paymentId ? await getRecord('payment', paymentId) : null
+  const ctx = paymentId ? await ctxFor('payment', paymentId).catch(() => null) : null
+  if (!ctx) return json({ ok: true, note: 'unknown payment' })
+  const ns = (await getRecord(ctx, 'setting', 'nedarim')) || {}
+  const { problems, ip } = await verifyOrigin(req, raw, secretFor(ctx, ns, 'NEDARIM_WEBHOOK_SECRET', 'webhookSecret'))
+  const p = await getRecord(ctx, 'payment', paymentId)
 
   // ניסיון שנכשל (סירוב / קאפצ'ה / שדה חסר) — לא תשלום. האייפרם מאפשר לנסות שוב.
   if (String(body.Status || '') === 'Error') {
     if (p && p.status === 'pending' && !problems.length)
-      await putRecords([['payment', { ...p, lastError: clean(String(body.Message || '').replace(/<br\s*\/?>/gi, ' '), 200), lastErrorAt: nowIso() }]])
+      await putRecords(ctx, [['payment', { ...p, lastError: clean(String(body.Message || '').replace(/<br\s*\/?>/gi, ' '), 200), lastErrorAt: nowIso() }]])
     return json({ ok: true, note: 'error attempt' })
   }
 
   if (!p) {
     if (!problems.length && (body.Confirmation || body.TransactionId))
-      await putRecords([['payment', { id: uid(), status: 'orphan', amount: Number(body.Amount || 0), raw: body, ip, refId: paymentId, purpose: 'unknown' }]])
+      await putRecords(ctx, [['payment', { id: uid(), status: 'orphan', amount: Number(body.Amount || 0), raw: body, ip, refId: paymentId, purpose: 'unknown' }]])
     return json({ ok: true, note: 'unknown payment' })
   }
   if (p.status === 'paid') return json({ ok: true, note: 'already paid' })
@@ -221,13 +255,13 @@ async function handleCallback(req: Request, raw: string, body: Record<string, an
 
   // מקור לא מאומת → ניסיון אחרון מול הסטוריית העסקאות
   if (problems.some((x) => x.startsWith('כתובת IP')) && info.historyId) {
-    const st = await settings().catch(() => null)
-    const ok = st ? await verifyWithHistory(st.mosad, info.historyId, Number(p.amount)) : null
+    const st = await settings(ctx).catch(() => null)
+    const ok = st ? await verifyWithHistory(st.mosad, secretFor(ctx, ns, 'NEDARIM_API_PASSWORD', 'apiPassword'), info.historyId, Number(p.amount)) : null
     if (ok) problems.splice(problems.findIndex((x) => x.startsWith('כתובת IP')), 1)
   }
 
   if (problems.length) {
-    await putRecords([['payment', { ...p, status: 'suspicious', problems, raw: body, ...info }]])
+    await putRecords(ctx, [['payment', { ...p, status: 'suspicious', problems, raw: body, ...info }]])
     return json({ ok: false, problems })
   }
 
@@ -236,23 +270,25 @@ async function handleCallback(req: Request, raw: string, body: Record<string, an
     { ...o, ...(k === 'sale' || k === 'wallet' ? { verified: true, nedarimId: info.historyId, ...(p.test ? { test: true } : {}) } : {}) },
   ])
   ops.push(['payment', { ...p, status: 'paid', ...info }])
-  await putRecords(ops)
+  await putRecords(ctx, ops)
   return json({ ok: true })
 }
 
 // ---------- דף טעינה להורים ----------
 async function handleInfo(body: Record<string, any>) {
-  const c = await getRecord('customer', String(body.customerId || ''))
-  if (!c || c.active === false) return json({ error: 'הקישור לא תקף' }, 404)
-  const st = await settings()
+  const ctx = await ctxFor('customer', String(body.customerId || ''))
+  const c = ctx ? await getRecord(ctx, 'customer', String(body.customerId || '')) : null
+  if (!ctx || !c || c.active === false) return json({ error: 'הקישור לא תקף' }, 404)
+  const st = await settings(ctx)
   if (st.s.parentLinks === false) return json({ error: 'טעינה דרך קישור כבויה' }, 403)
   return json({ name: c.name, group: c.group || '', minTopup: st.minTopup, title: st.title, test: st.test })
 }
 
-async function handleCreate(req: Request, body: Record<string, any>) {
-  const c = await getRecord('customer', String(body.customerId || ''))
-  if (!c || c.active === false) return json({ error: 'הקישור לא תקף' }, 404)
-  const st = await settings()
+async function handleCreate(_req: Request, body: Record<string, any>) {
+  const ctx = await ctxFor('customer', String(body.customerId || ''))
+  const c = ctx ? await getRecord(ctx, 'customer', String(body.customerId || '')) : null
+  if (!ctx || !c || c.active === false) return json({ error: 'הקישור לא תקף' }, 404)
+  const st = await settings(ctx)
   if (st.s.parentLinks === false) return json({ error: 'טעינה דרך קישור כבויה' }, 403)
   const amount = Math.round(Number(body.amount || 0) * 100) / 100
   if (!(amount > 0) || amount > 5000) return json({ error: 'סכום לא תקין' }, 400)
@@ -287,23 +323,25 @@ async function handleCreate(req: Request, body: Record<string, any>) {
       ],
     ],
   }
-  await putRecords([['payment', p]])
-  const tx = await createNedarimTx(req, p, { name: payerName, phone: body.phone })
+  await putRecords(ctx, [['payment', p]])
+  const tx = await createNedarimTx(ctx, p, { name: payerName, phone: body.phone })
   return json({ paymentId: p.id, amount, txId: tx.ID, test: tx.test })
 }
 
 // ---------- קופה: הקמת עסקה לתשלום שכבר נשמר ----------
-async function handleCreateTx(req: Request, body: Record<string, any>) {
-  const p = await getRecord('payment', String(body.paymentId || ''))
+async function handleCreateTx(_req: Request, body: Record<string, any>) {
+  const ctx = await ctxFor('payment', String(body.paymentId || ''))
+  const p = ctx ? await getRecord(ctx, 'payment', String(body.paymentId || '')) : null
   if (!p) return json({ error: 'התשלום עוד לא הגיע לשרת — נסה שוב' }, 404)
   if (p.status !== 'pending') return json({ error: 'התשלום כבר טופל' }, 409)
   if (!(Number(p.amount) > 0) || Number(p.amount) > 5000) return json({ error: 'סכום לא תקין' }, 400)
-  const tx = await createNedarimTx(req, p, { name: body.payerName, phone: body.phone })
+  const tx = await createNedarimTx(ctx!, p, { name: body.payerName, phone: body.phone })
   return json({ paymentId: p.id, txId: tx.ID, test: tx.test })
 }
 
 async function handleStatus(body: Record<string, any>) {
-  const p = await getRecord('payment', String(body.paymentId || ''))
+  const ctx = await ctxFor('payment', String(body.paymentId || '')).catch(() => null)
+  const p = ctx ? await getRecord(ctx, 'payment', String(body.paymentId || '')) : null
   if (!p) return json({ error: 'לא נמצא' }, 404)
   return json({ status: p.status, lastError: p.lastError || '' })
 }

@@ -544,3 +544,24 @@ export function splitCodes(v) {
     .map((x) => x.trim().replace(/\.0+$/, ''))
     .filter(Boolean)
 }
+
+/** מחיקת כל הנתונים המקומיים במכשיר (מעבר לחנות אחרת). הנתונים בשרת לא נפגעים */
+export async function resetLocalData() {
+  for (const k of Object.keys(data)) data[k].clear()
+  outbox.clear()
+  meta.clear()
+  pendingWrites = { records: new Map(), outbox: new Map(), meta: new Map() }
+  for (const s of Object.keys(memFallback)) memFallback[s].clear()
+  if (idb)
+    await new Promise((res) => {
+      try {
+        const tx = idb.transaction(['records', 'outbox', 'meta'], 'readwrite')
+        ;['records', 'outbox', 'meta'].forEach((s) => tx.objectStore(s).clear())
+        tx.oncomplete = () => res()
+        tx.onerror = () => res()
+      } catch {
+        res()
+      }
+    })
+  emit(false)
+}

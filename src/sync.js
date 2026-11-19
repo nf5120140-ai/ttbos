@@ -4,7 +4,7 @@
 // עובד גם כשאין אינטרנט: הכל נשמר מקומית ונשלח כשהרשת חוזרת.
 // ============================================================
 import { createClient } from '@supabase/supabase-js'
-import { DEMO, outboxRows, markPushed, applyRemote, getMeta, setMeta, outboxSize, setOnLocalChange, ensureDefaultManager } from './db.js'
+import { DEMO, outboxRows, markPushed, applyRemote, getMeta, setMeta, outboxSize, setOnLocalChange, ensureDefaultManager, resetLocalData } from './db.js'
 
 function readCfg() {
   let url = import.meta.env.VITE_SUPABASE_URL || ''
@@ -37,6 +37,7 @@ export const status = {
   authed: false,
   email: '',
   member: null, // null = לא נבדק, true / false
+  store: null, // {store_id, name, status, is_super, acting, features} — כמה חנויות
   recovery: false,
   syncing: false,
   lastSync: null,
@@ -150,24 +151,67 @@ export async function startSync() {
 }
 
 /** האם המשתמש המחובר שייך למזנון (המייל הראשון שנרשם, או מי שהמנהל אישר) */
+const savedStore = () => {
+  try {
+    return JSON.parse(localStorage.getItem('tt_store_info') || 'null')
+  } catch {
+    return null
+  }
+}
 export async function checkMember() {
   if (!sb) return true
   if (!navigator.onLine && localStorage.getItem('tt_member') !== '0') {
-    setStatus({ member: true })
+    setStatus({ member: true, store: savedStore() })
     return true
   }
-  const { data, error } = await sb.rpc('tt_is_member')
   let member
-  if (error) {
-    // מבנה ישן בלי טבלת חברים — כל מי שמחובר מורשה
-    member = /tt_is_member|function|PGRST202/i.test(error.message || '') ? true : localStorage.getItem('tt_member') === '1'
-  } else member = !!data
+  let store = null
+  const st = await sb.rpc('tt_my_status')
+  if (!st.error && st.data) {
+    // ---- כמה חנויות ----
+    store = st.data
+    member = store.status === 'active'
+    let prev = null
+    try {
+      prev = localStorage.getItem('tt_store_id')
+      if (store.store_id) localStorage.setItem('tt_store_id', store.store_id)
+      localStorage.setItem('tt_store_info', JSON.stringify(store))
+    } catch {}
+    // המכשיר עבר לחנות אחרת → מוחקים את הנתונים המקומיים של החנות הקודמת וטוענים מחדש
+    if (store.store_id && prev && prev !== store.store_id) {
+      await resetLocalData()
+      location.reload()
+      return false
+    }
+  } else {
+    // מבנה ישן (חנות אחת)
+    const { data, error } = await sb.rpc('tt_is_member')
+    if (error) member = /tt_is_member|function|PGRST202/i.test(error.message || '') ? true : localStorage.getItem('tt_member') === '1'
+    else member = !!data
+  }
   try {
     localStorage.setItem('tt_member', member ? '1' : '0')
   } catch {}
-  setStatus({ member })
+  setStatus({ member, store })
   if (member) syncNow()
   return member
+}
+
+/** מנהל-על: כניסה לנתונים של חנות (null = יציאה). שומר קודם את מה שלא נשלח */
+export async function adminEnterStore(storeId) {
+  await syncNow()
+  if (outboxSize() > 0) throw new Error('יש שינויים שעוד לא נשלחו לשרת — בדוק חיבור לאינטרנט ונסה שוב')
+  const { error } = await sb.rpc('tt_admin_enter', { p_store: storeId })
+  if (error) throw new Error(error.message)
+  await resetLocalData()
+  try {
+    localStorage.removeItem('tt_store_id')
+  } catch {}
+  location.reload()
+}
+export async function sendPasswordReset(email) {
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin })
+  if (error) throw new Error(heAuthError(error))
 }
 
 const heAuthError = (e) => {
@@ -188,8 +232,8 @@ export async function cloudLogin(email, password) {
   return checkMember()
 }
 /** רישום ראשון. מחזיר 'ok' | 'confirm' (צריך לאשר במייל) | 'exists' */
-export async function cloudSignup(email, password) {
-  const { data, error } = await sb.auth.signUp({ email, password })
+export async function cloudSignup(email, password, meta = {}) {
+  const { data, error } = await sb.auth.signUp({ email, password, options: { data: meta } })
   if (error) {
     const m = heAuthError(error)
     if (m === 'already') return 'exists'
@@ -211,8 +255,10 @@ export async function cloudSetPassword(password) {
   setStatus({ recovery: false })
 }
 export async function cloudLogout() {
+  await syncNow().catch(() => {})
   try {
     localStorage.removeItem('tt_member')
+    localStorage.removeItem('tt_store_info')
   } catch {}
   await sb.auth.signOut()
 }

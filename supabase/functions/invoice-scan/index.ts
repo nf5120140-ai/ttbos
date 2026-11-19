@@ -51,11 +51,31 @@ ${plist || '(אין מוצרים עדיין)'}
 ${slist || '(אין ספקים)'}`
 }
 
+// כמה חנויות: הסריקה עולה כסף — מותרת רק לחנות שמנהל-העל הפעיל לה (features.invoice_scan)
+async function scanAllowed(req: Request) {
+  const base = (Deno.env.get('SUPABASE_URL') || '').replace(/\/$/, '')
+  const anon = Deno.env.get('SUPABASE_ANON_KEY') || ''
+  try {
+    const r = await fetch(`${base}/rest/v1/rpc/tt_my_status`, {
+      method: 'POST',
+      headers: { Authorization: req.headers.get('authorization') || '', apikey: anon, 'content-type': 'application/json' },
+      body: '{}',
+    })
+    if (r.status === 404) return true // מבנה ישן — חנות אחת
+    if (!r.ok) return false
+    const st = await r.json()
+    return st?.status === 'active' && st?.features?.invoice_scan === true
+  } catch {
+    return false
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   try {
     const key = Deno.env.get('ANTHROPIC_API_KEY')
     if (!key) return json({ error: 'חסר ANTHROPIC_API_KEY בסודות של Supabase' }, 500)
+    if (!(await scanAllowed(req))) return json({ error: 'סריקת חשבוניות לא פעילה בחנות הזו — פנה למנהל המערכת' }, 403)
     const body = await req.json()
     const { products = [], suppliers = [] } = body
     // files: [{data, mediaType}] — כמה עמודים / תמונות של אותו מסמך
