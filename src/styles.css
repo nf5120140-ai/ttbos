@@ -1922,3 +1922,10 @@ body.cd-body { margin: 0; background: #0f2a22; overflow: hidden; }
 .store-row.blocked { opacity: .7; background: #f8f8f8; }
 .store-mails { border-top: 1px dashed #dde; padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .badge-warn { background: #f0b429; color: #3d2a00; border-radius: 999px; padding: 1px 8px; font-size: 13px; margin-inline-start: 6px; }
+
+/* דוח מפורט */
+.table-scroll { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+table.clickable tbody tr { cursor: pointer; }
+table.clickable tbody tr:hover td { background: #f4f7fb; }
+.sale-sum { border-top: 1px solid #e3e7ee; margin-top: 8px; padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.period input[type='date'] { width: auto; }

@@ -203,6 +203,10 @@ export function get(kind, id) {
   const r = data[kind].get(id)
   return r && !r.deleted ? r : null
 }
+/** כולל רשומות שנמחקו — לדוחות על מוצרים / בחורים שכבר לא קיימים */
+export function getAny(kind, id) {
+  return data[kind].get(id) || null
+}
 export const balanceOf = (cid) => derived.balance.get(cid) || 0
 export const stockOf = (pid) => derived.stock.get(pid) || 0
 export const outboxSize = () => outbox.size

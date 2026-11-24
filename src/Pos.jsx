@@ -220,6 +220,7 @@ export default function Pos({ user }) {
       price: l.unit,
       regularPrice: l.regular,
       cost: Number(l.p.cost) || 0,
+      ...(l.p.general ? {} : { category: l.p.category || '', barcode: l.p.barcode || '' }),
       ...(l.promoId ? { promoId: l.promoId, promoName: l.promoName } : {}),
       ...(l.staffApplied ? { staffApplied: true } : {}),
     }))

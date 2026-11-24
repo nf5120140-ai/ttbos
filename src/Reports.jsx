@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { list, get, save, drawerStatus, deviceName, deviceId, round2, approvePaymentManually, dismissPayment } from './db.js'
+import { list, get, getAny, save, drawerStatus, deviceName, deviceId, round2, approvePaymentManually, dismissPayment } from './db.js'
 import { useVersion, money, fmtDT, toast, Empty, downloadFile, toCsv, ProductThumb, confirmDlg } from './ui.jsx'
 import { staffMethodLabel } from './Staff.jsx'
+import { ReportDetail } from './ReportDetail.jsx'
 
 // ---------- טווחי תאריכים ----------
 function startOf(type, d) {
@@ -40,8 +41,13 @@ export function Reports({ user }) {
   const [type, setType] = useState('day')
   const [anchor, setAnchor] = useState(() => startOf('day', new Date()))
   const [device, setDevice] = useState('all')
-  const start = startOf(type, anchor)
-  const end = shift(type, start, 1)
+  // טווח חופשי (למשל עונה / מכירה זמנית)
+  const isoDay = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  const [from, setFrom] = useState(() => isoDay(new Date(Date.now() - 29 * 864e5)))
+  const [to, setTo] = useState(() => isoDay(new Date()))
+  const custom = type === 'custom'
+  const start = custom ? new Date(from + 'T00:00:00') : startOf(type, anchor)
+  const end = custom ? new Date(new Date(to + 'T00:00:00').getTime() + 864e5) : shift(type, start, 1)
   const sIso = start.toISOString()
   const eIso = end.toISOString()
 
@@ -114,15 +120,24 @@ export function Reports({ user }) {
         const b = buckets.find((x) => x.k === h)
         if (b) b.v += s.total
       }
-    } else if (type === 'week' || type === 'month') {
-      const n = Math.round((end - start) / 864e5)
+    } else if (type === 'week' || type === 'month' || (type === 'custom' && end - start <= 62 * 864e5)) {
+      const n = Math.max(1, Math.round((end - start) / 864e5))
       for (let i = 0; i < n; i++) {
         const d = new Date(start)
         d.setDate(d.getDate() + i)
-        buckets.push({ k: d.toDateString(), label: type === 'week' ? HEB_DAYS[d.getDay()] : String(d.getDate()), v: 0 })
+        buckets.push({ k: d.toDateString(), label: type === 'week' ? HEB_DAYS[d.getDay()] : type === 'custom' ? `${d.getDate()}.${d.getMonth() + 1}` : String(d.getDate()), v: 0 })
       }
       for (const s of ok) {
         const b = buckets.find((x) => x.k === new Date(s.createdAt).toDateString())
+        if (b) b.v += s.total
+      }
+    } else if (type === 'custom') {
+      // טווח ארוך — לפי חודש
+      for (let d = new Date(start.getFullYear(), start.getMonth(), 1); d < end; d.setMonth(d.getMonth() + 1))
+        buckets.push({ k: d.getFullYear() * 12 + d.getMonth(), label: HEB_MONTHS[d.getMonth()] + (d.getMonth() === 0 || !buckets.length ? ' ' + String(d.getFullYear()).slice(2) : ''), v: 0 })
+      for (const s of ok) {
+        const d = new Date(s.createdAt)
+        const b = buckets.find((x) => x.k === d.getFullYear() * 12 + d.getMonth())
         if (b) b.v += s.total
       }
     } else {
@@ -151,7 +166,7 @@ export function Reports({ user }) {
     for (const s of ok)
       for (const i of s.items) {
         const key = i.general ? 'general' : i.productId
-        const x = byProd.get(key) || { id: key, name: i.general ? '✏️ פריט כללי' : i.name, qty: 0, total: 0, profit: 0 }
+        const x = byProd.get(key) || { id: key, name: i.general ? '✏️ פריט כללי' : i.name, category: i.category, qty: 0, total: 0, profit: 0 }
         const f = 1 - (s.discountPct || 0) / 100
         x.qty += i.qty
         x.total += i.qty * i.price * f
@@ -163,7 +178,7 @@ export function Reports({ user }) {
     // by category
     const byCat = new Map()
     for (const p of prods) {
-      const c = get('product', p.id)?.category || 'אחר'
+      const c = p.id === 'general' ? 'פריט כללי' : getAny('product', p.id)?.category || p.category || 'אחר'
       byCat.set(c, (byCat.get(c) || 0) + p.total)
     }
 
@@ -231,13 +246,14 @@ export function Reports({ user }) {
             ['week', 'שבועי'],
             ['month', 'חודשי'],
             ['year', 'שנתי'],
+            ['custom', 'טווח'],
           ].map(([k, l]) => (
             <button
               key={k}
               className={type === k ? 'on' : ''}
               onClick={() => {
                 setType(k)
-                setAnchor(startOf(k, new Date()))
+                if (k !== 'custom') setAnchor(startOf(k, new Date()))
               }}
             >
               {l}
@@ -245,15 +261,24 @@ export function Reports({ user }) {
           ))}
         </div>
       </div>
-      <div className="period">
-        <button className="btn" onClick={() => setAnchor(shift(type, start, -1))}>
-          ‹ קודם
-        </button>
-        <b>{label(type, start)}</b>
-        <button className="btn" onClick={() => setAnchor(shift(type, start, 1))} disabled={end > new Date()}>
-          הבא ›
-        </button>
-      </div>
+      {custom ? (
+        <div className="period">
+          <span>מ־</span>
+          <input type="date" value={from} max={to} onChange={(e) => e.target.value && setFrom(e.target.value)} />
+          <span>עד</span>
+          <input type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} />
+        </div>
+      ) : (
+        <div className="period">
+          <button className="btn" onClick={() => setAnchor(shift(type, start, -1))}>
+            ‹ קודם
+          </button>
+          <b>{label(type, start)}</b>
+          <button className="btn" onClick={() => setAnchor(shift(type, start, 1))} disabled={end > new Date()}>
+            הבא ›
+          </button>
+        </div>
+      )}
       <div className="toolbar">
         <select value={device} onChange={(e) => setDevice(e.target.value)}>
           <option value="all">כל המכשירים</option>
@@ -302,6 +327,8 @@ export function Reports({ user }) {
           ))}
         </div>
       </div>
+
+      <ReportDetail sales={r.sales} users={r.users} fileTag={custom ? `${from}_${to}` : start.toLocaleDateString('he-IL').replace(/\./g, '-')} />
 
       <div className="two-col">
         <div className="card">
