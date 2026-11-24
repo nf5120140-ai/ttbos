@@ -1929,3 +1929,11 @@ table.clickable tbody tr { cursor: pointer; }
 table.clickable tbody tr:hover td { background: #f4f7fb; }
 .sale-sum { border-top: 1px solid #e3e7ee; margin-top: 8px; padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .period input[type='date'] { width: auto; }
+
+/* התאמת אשראי */
+.recon-map { background: #f7f9fc; border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+.recon-map label { display: flex; flex-direction: column; gap: 2px; }
+tr.recon-bad td { background: #fff1f0; }
+tr.recon-warn td { background: #fff8e6; }
+tr.recon-muted td { color: #8a93a3; }
+.seg.wrap { flex-wrap: wrap; }

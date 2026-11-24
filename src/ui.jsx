@@ -96,8 +96,8 @@ export function ToastHost() {
 
 // ---------- confirm ----------
 let confirmSetter = null
-export function confirmDlg(text, okText = 'אישור', cancelText = 'ביטול', okClass = 'danger') {
-  return new Promise((resolve) => confirmSetter && confirmSetter({ text, okText, cancelText, okClass, resolve }))
+export function confirmDlg(text, okText = 'אישור') {
+  return new Promise((resolve) => confirmSetter && confirmSetter({ text, okText, resolve }))
 }
 export function ConfirmHost() {
   const [c, setC] = useState(null)
@@ -112,13 +112,13 @@ export function ConfirmHost() {
   }
   return (
     <Modal title="אישור" onClose={() => done(false)} small>
-      <p style={{ fontSize: 18, margin: '8px 0 20px', whiteSpace: 'pre-line' }}>{c.text}</p>
+      <p style={{ fontSize: 18, margin: '8px 0 20px' }}>{c.text}</p>
       <div className="row gap">
-        <button className={'btn grow ' + (c.okClass || 'danger')} onClick={() => done(true)}>
+        <button className="btn danger grow" onClick={() => done(true)}>
           {c.okText}
         </button>
         <button className="btn grow" onClick={() => done(false)}>
-          {c.cancelText || 'ביטול'}
+          ביטול
         </button>
       </div>
     </Modal>

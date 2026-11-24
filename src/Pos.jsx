@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { publishDisplay, listenHello } from './display.js'
 import { openDrawer, openDrawerManual, drawerCfg } from './drawer.js'
-import { list, get, getSetting, uid, sameCode, productHasCode, productCodes, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
+import { list, get, getSetting, sameCode, productHasCode, productCodes, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
 import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
 import { VerifyStaffModal, staffMethodLabel } from './Staff.jsx'
 import { priceCart, unitPromoFor, bundlesFor, staffUnit, livePromos, promoLabel } from './pricing.js'
@@ -13,7 +13,6 @@ import {
   toast,
   confirmDlg,
   Modal,
-  Field,
   ProductThumb,
   useBarcodeScanner,
   useScanField,
@@ -23,70 +22,9 @@ import {
 } from './ui.jsx'
 
 
-// פריט כללי — בלי מלאי, בלי מבצעים ובלי הנחת עובד; המחיר שהוקלד הוא המחיר
-function genProduct(c) {
-  return { id: c.productId, name: c.gen.name, price: c.gen.price, staffPrice: c.gen.price, emoji: '✏️', general: true, cost: 0 }
-}
-
-function GeneralItemModal({ onClose, onAdd }) {
-  const [amt, setAmt] = useState('')
-  const [name, setName] = useState('')
-  const [qty, setQty] = useState(1)
-  const price = round2(Number(amt) || 0)
-  const press = (k) =>
-    setAmt((a) => {
-      if (k === 'C') return ''
-      if (k === '⌫') return a.slice(0, -1)
-      if (k === '.' && a.includes('.')) return a
-      if (/\.\d\d$/.test(a)) return a
-      const n = (a === '0' && k !== '.' ? '' : a) + k
-      return n.length > 7 ? a : n
-    })
-  const ok = () => price > 0 && onAdd(name.trim() || 'פריט כללי', price, Math.max(1, qty))
-  return (
-    <Modal title="✏️ פריט כללי" onClose={onClose} small>
-      <div className="gen-amt" dir="ltr">₪{amt || '0'}</div>
-      <div className="gen-pad">
-        {['7', '8', '9', '4', '5', '6', '1', '2', '3', '.', '0', '⌫'].map((k) => (
-          <button key={k} className="btn" onClick={() => press(k)}>
-            {k}
-          </button>
-        ))}
-      </div>
-      <div className="row gap-s" style={{ marginTop: 8 }}>
-        {[5, 10, 20, 50].map((x) => (
-          <button key={x} className="btn grow small" onClick={() => setAmt(String(x))}>
-            ₪{x}
-          </button>
-        ))}
-      </div>
-      <Field label="תיאור (לא חובה)">
-        <input
-          value={name}
-          placeholder="פריט כללי"
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && ok()}
-        />
-      </Field>
-      <div className="row gap-s" style={{ alignItems: 'center' }}>
-        <span>כמות</span>
-        <div className="qty">
-          <button onClick={() => setQty((q) => q + 1)}>+</button>
-          <span>{qty}</span>
-          <button onClick={() => setQty((q) => Math.max(1, q - 1))}>−</button>
-        </div>
-      </div>
-      <button className="btn primary big" style={{ width: '100%', marginTop: 12 }} disabled={!(price > 0)} onClick={ok}>
-        הוסף לסל {price > 0 ? money(price * qty) : ''}
-      </button>
-    </Modal>
-  )
-}
-
 export default function Pos({ user }) {
   const v = useVersion()
-  const [cart, setCart] = useState([]) // [{productId, qty}] — פריט כללי: {productId:'gen:..', qty, gen:{name, price}}
-  const [genOpen, setGenOpen] = useState(false)
+  const [cart, setCart] = useState([]) // [{productId, qty}]
   const [customerId, setCustomerId] = useState(null)
   const [staffAuth, setStaffAuth] = useState(null) // {buyerId, method, approvedBy} — מחיר מוכרים מאומת
   const [verifyFor, setVerifyFor] = useState(null) // {targetUserId}
@@ -136,7 +74,7 @@ export default function Pos({ user }) {
   const customerPct = Number(customer?.discountPct) || 0
   const promos = useMemo(() => livePromos(), [v])
   const priced = priceCart(
-    cart.map((c) => ({ ...c, p: c.gen ? genProduct(c) : get('product', c.productId) })).filter((l) => l.p),
+    cart.map((c) => ({ ...c, p: get('product', c.productId) })).filter((l) => l.p),
     { staff, staffPct, customerPct }
   )
   const lines = priced.lines.map((l) => ({ ...l, price: l.unit }))
@@ -209,18 +147,16 @@ export default function Pos({ user }) {
     return false
   }
   const scanField = useScanField(q, setQ, handleCode)
-  useBarcodeScanner(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen && !verifyFor && !genOpen)
+  useBarcodeScanner(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen && !verifyFor)
 
   function items() {
     return lines.map((l) => ({
-      productId: l.p.general ? 'general' : l.p.id,
+      productId: l.p.id,
       name: l.p.name,
-      ...(l.p.general ? { general: true } : {}),
       qty: l.qty,
       price: l.unit,
       regularPrice: l.regular,
       cost: Number(l.p.cost) || 0,
-      ...(l.p.general ? {} : { category: l.p.category || '', barcode: l.p.barcode || '' }),
       ...(l.promoId ? { promoId: l.promoId, promoName: l.promoName } : {}),
       ...(l.staffApplied ? { staffApplied: true } : {}),
     }))
@@ -302,9 +238,6 @@ export default function Pos({ user }) {
               📷
             </button>
           )}
-          <button className="btn" onClick={() => setGenOpen(true)} title="פריט כללי — מקלידים סכום">
-            ✏️ פריט כללי
-          </button>
         </div>
         <div className="cats">
           <button className={cat === '__top' ? 'on' : ''} onClick={() => setCat('__top')}>
@@ -483,16 +416,6 @@ export default function Pos({ user }) {
       </section>
 
       {picker && <CustomerPicker onPick={selectCustomer} onClose={() => setPicker(false)} />}
-      {genOpen && (
-        <GeneralItemModal
-          onClose={() => setGenOpen(false)}
-          onAdd={(name, price, qty) => {
-            setCart((c) => [...c, { productId: 'gen:' + uid(), qty, gen: { name, price } }])
-            toast('➕ ' + name + ' ' + money(price * qty))
-            setGenOpen(false)
-          }}
-        />
-      )}
       {cashModal && <CashModal total={total} onPay={payCash} onClose={() => setCashModal(false)} />}
       {cam && (
         <CameraScanner

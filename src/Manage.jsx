@@ -409,7 +409,6 @@ export function Inventory({ user }) {
   const [priceList, setPriceList] = useState(false)
   const [promos, setPromos] = useState(false)
   const [importing, setImporting] = useState(false)
-  const [bulk, setBulk] = useState(false)
   const [counts, setCounts] = useState({})
   const products = useMemo(() => list('product'), [v])
   const suppliers = new Map(list('supplier').map((s) => [s.id, s.name]))
@@ -463,9 +462,6 @@ export function Inventory({ user }) {
           </button>
           <button className="btn" onClick={() => exportProducts().catch((e) => toast(e.message, 'err'))}>
             📤 ייצוא לאקסל
-          </button>
-          <button className="btn" onClick={() => setBulk(true)}>
-            🗂 סגירת קטגוריה / עונה
           </button>
           <button className="btn" onClick={() => setPromos(true)}>
             🏷 מבצעים
@@ -565,7 +561,6 @@ export function Inventory({ user }) {
       {invoice && <InvoiceIntake user={user} onClose={() => setInvoice(false)} />}
       {priceList && <PriceList onClose={() => setPriceList(false)} />}
       {promos && <Promos onClose={() => setPromos(false)} />}
-      {bulk && <BulkCategory user={user} onClose={() => setBulk(false)} />}
       {importing && <ImportProducts user={user} onClose={() => setImporting(false)} />}
     </div>
   )
@@ -632,7 +627,7 @@ function ProductEditor({ p, user, onClose }) {
     onClose()
   }
   async function del() {
-    if (!(await confirmDlg('למחוק את ' + p.name + ' מהמלאי?\nכל המכירות שלו נשארות בדוחות, עם המחירים שבהם נמכר.\n(אפשר גם רק לסמן "לא פעיל" — כך אפשר להחזיר אותו בעתיד)', 'מחק'))) return
+    if (!(await confirmDlg('למחוק את ' + p.name + '? (אפשר גם רק לסמן "לא פעיל")', 'מחק'))) return
     remove('product', p.id)
     onClose()
   }
@@ -1130,71 +1125,3 @@ function ReceiveOrder({ o, user, onClose }) {
   )
 }
 
-
-// סגירת קטגוריה / עונה: מוצרים שנמכרו זמנית (למשל בגדי חורף) — מסתירים או מוחקים מהמלאי.
-// המכירות שלהם נשארות בדוחות עם השם, המחיר והכמות מזמן המכירה.
-function BulkCategory({ user, onClose }) {
-  const products = list('product')
-  const cats = [...new Set(products.map((p) => p.category || 'כללי'))].sort((a, b) => a.localeCompare(b, 'he'))
-  const [cat, setCat] = useState('')
-  const inCat = products.filter((p) => (p.category || 'כללי') === cat)
-  const active = inCat.filter((p) => p.active !== false)
-  const inactive = inCat.filter((p) => p.active === false)
-  const withStock = inCat.filter((p) => stockOf(p.id) > 0)
-  const setActive = (on) => {
-    const list2 = on ? inactive : active
-    for (const p of list2) save('product', { ...p, active: on })
-    toast(on ? `✓ ${list2.length} מוצרים הוחזרו לקופה` : `✓ ${list2.length} מוצרים הוסתרו מהקופה ומהמלאי`)
-    onClose()
-  }
-  const delAll = async () => {
-    const ok = await confirmDlg(
-      `למחוק ${inCat.length} מוצרים בקטגוריה "${cat}" מהמלאי?\n\nהמכירות שלהם נשארות בדוחות (שם, מחיר וכמות כפי שנמכרו).${withStock.length ? `\n\nשים לב: ל-${withStock.length} מהם עוד יש מלאי.` : ''}\n\nאי אפשר להחזיר מוצרים שנמחקו — אם המכירה תחזור בשנה הבאה, עדיף "להסתיר".`,
-      'מחק הכול'
-    )
-    if (!ok) return
-    for (const p of inCat) remove('product', p.id)
-    toast(`נמחקו ${inCat.length} מוצרים`)
-    onClose()
-  }
-  return (
-    <Modal title="🗂 סגירת קטגוריה / עונה" onClose={onClose}>
-      <p className="muted small">למשל אחרי מכירת בגדי חורף: בוחרים את הקטגוריה ומסתירים או מוחקים את כל המוצרים שלה בבת אחת. הדוחות על מה שנמכר נשארים מלאים.</p>
-      <Field label="קטגוריה">
-        <select value={cat} onChange={(e) => setCat(e.target.value)}>
-          <option value="">— בחר —</option>
-          {cats.map((c) => (
-            <option key={c} value={c}>
-              {c} ({products.filter((p) => (p.category || 'כללי') === c).length})
-            </option>
-          ))}
-        </select>
-      </Field>
-      {cat && (
-        <>
-          <p className="small">
-            {inCat.length} מוצרים · {active.length} פעילים · {inactive.length} מוסתרים{withStock.length ? ` · ל-${withStock.length} יש עוד מלאי` : ''}
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {active.length > 0 && (
-              <button className="btn primary" onClick={() => setActive(false)}>
-                🙈 הסתר את כל הקטגוריה (מומלץ — אפשר להחזיר בעונה הבאה)
-              </button>
-            )}
-            {inactive.length > 0 && (
-              <button className="btn" onClick={() => setActive(true)}>
-                👁 החזר את כל הקטגוריה לקופה
-              </button>
-            )}
-            <button className="btn danger" onClick={delAll}>
-              🗑 מחק את כל המוצרים בקטגוריה
-            </button>
-          </div>
-          <p className="muted small" style={{ marginTop: 8 }}>
-            דוחות: בדוחות ← "טווח" ← בוחרים את תאריכי המכירה ← "דוח מפורט" ← הקטגוריה.
-          </p>
-        </>
-      )}
-    </Modal>
-  )
-}

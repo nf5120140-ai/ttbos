@@ -244,7 +244,7 @@ foreach ($u in $sel) {
     New-ItemProperty -Path "$gc\URLBlocklist" -Name '1' -Value '*' -PropertyType String -Force | Out-Null
     New-Item -Path "$gc\URLAllowlist" -Force | Out-Null
     $i = 1
-    foreach ($h in @('${appHost}', 'supabase.co', 'matara.pro', 'nedarimplus.co.il', 'nedarim.org.il', 'www.google.com/recaptcha', 'www.gstatic.com/recaptcha', 'www.recaptcha.net', 'recaptcha.google.com', 'blob:*', 'data:*')) { New-ItemProperty -Path "$gc\URLAllowlist" -Name "$i" -Value $h -PropertyType String -Force | Out-Null; $i++ }
+    foreach ($h in @('${appHost}', 'supabase.co', 'matara.pro', 'nedarimplus.co.il', 'blob:*', 'data:*')) { New-ItemProperty -Path "$gc\URLAllowlist" -Name "$i" -Value $h -PropertyType String -Force | Out-Null; $i++ }
     # the small customer display (USB/COM) works without asking
     New-Item -Path "$gc\SerialAllowAllPortsForUrls" -Force | Out-Null
     New-ItemProperty -Path "$gc\SerialAllowAllPortsForUrls" -Name '1' -Value 'https://${appHost}' -PropertyType String -Force | Out-Null

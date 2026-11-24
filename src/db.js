@@ -203,10 +203,6 @@ export function get(kind, id) {
   const r = data[kind].get(id)
   return r && !r.deleted ? r : null
 }
-/** כולל רשומות שנמחקו — לדוחות על מוצרים / בחורים שכבר לא קיימים */
-export function getAny(kind, id) {
-  return data[kind].get(id) || null
-}
 export const balanceOf = (cid) => derived.balance.get(cid) || 0
 export const stockOf = (pid) => derived.stock.get(pid) || 0
 export const outboxSize = () => outbox.size
@@ -339,7 +335,7 @@ export function buildSale({ items, customerId, payment, discountPct, sellerId, s
       },
     ],
   ]
-  for (const it of items) if (!it.general) ops.push(['stock', { id: uid(), productId: it.productId, qty: -it.qty, reason: 'sale', ref: saleId, userId: sellerId, createdAt: now }])
+  for (const it of items) ops.push(['stock', { id: uid(), productId: it.productId, qty: -it.qty, reason: 'sale', ref: saleId, userId: sellerId, createdAt: now }])
   if (payment === 'wallet' && customerId)
     ops.push(['wallet', { id: uid(), customerId, amount: -total, type: 'purchase', ref: saleId, userId: sellerId, createdAt: now }])
   return { id: saleId, total, ops }
@@ -355,7 +351,7 @@ export function sell(args) {
 export function voidSale(sale, userId, reason = '') {
   if (sale.voided) return
   const ops = [['sale', { ...sale, voided: { by: userId, at: nowIso(), reason } }]]
-  for (const it of sale.items) if (!it.general) ops.push(['stock', { productId: it.productId, qty: it.qty, reason: 'void', ref: sale.id, userId }])
+  for (const it of sale.items) ops.push(['stock', { productId: it.productId, qty: it.qty, reason: 'void', ref: sale.id, userId }])
   if (sale.payment === 'wallet' && sale.customerId)
     ops.push(['wallet', { customerId: sale.customerId, amount: sale.total, type: 'refund', ref: sale.id, userId }])
   saveMany(ops)
@@ -547,25 +543,4 @@ export function splitCodes(v) {
     .split(/[\s,;|]+/)
     .map((x) => x.trim().replace(/\.0+$/, ''))
     .filter(Boolean)
-}
-
-/** מחיקת כל הנתונים המקומיים במכשיר (מעבר לחנות אחרת). הנתונים בשרת לא נפגעים */
-export async function resetLocalData() {
-  for (const k of Object.keys(data)) data[k].clear()
-  outbox.clear()
-  meta.clear()
-  pendingWrites = { records: new Map(), outbox: new Map(), meta: new Map() }
-  for (const s of Object.keys(memFallback)) memFallback[s].clear()
-  if (idb)
-    await new Promise((res) => {
-      try {
-        const tx = idb.transaction(['records', 'outbox', 'meta'], 'readwrite')
-        ;['records', 'outbox', 'meta'].forEach((s) => tx.objectStore(s).clear())
-        tx.oncomplete = () => res()
-        tx.onerror = () => res()
-      } catch {
-        res()
-      }
-    })
-  emit(false)
 }

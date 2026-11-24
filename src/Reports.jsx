@@ -3,6 +3,7 @@ import { list, get, getAny, save, drawerStatus, deviceName, deviceId, round2, ap
 import { useVersion, money, fmtDT, toast, Empty, downloadFile, toCsv, ProductThumb, confirmDlg } from './ui.jsx'
 import { staffMethodLabel } from './Staff.jsx'
 import { ReportDetail } from './ReportDetail.jsx'
+import { CreditRecon } from './CreditRecon.jsx'
 
 // ---------- טווחי תאריכים ----------
 function startOf(type, d) {
@@ -327,6 +328,8 @@ export function Reports({ user }) {
           ))}
         </div>
       </div>
+
+      <CreditRecon sIso={sIso} eIso={eIso} users={r.users} fileTag={custom ? `${from}_${to}` : start.toLocaleDateString('he-IL').replace(/\./g, '-')} />
 
       <ReportDetail sales={r.sales} users={r.users} fileTag={custom ? `${from}_${to}` : start.toLocaleDateString('he-IL').replace(/\./g, '-')} />
 
