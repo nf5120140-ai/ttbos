@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import Receive from './Receive.jsx'
+import { retryTempNames, approveName, lookupBarcode } from './lookup.js'
 import { list, get, save, remove, productCodes, sameCode, splitCodes, balanceOf, stockOf, topup, buildTopup, voidTopup, receiveStock, setStockTo, round2, getSetting } from './db.js'
 import { CreditModal, TerminalModal, creditStatus } from './Credit.jsx'
 import { InvoiceIntake } from './Invoice.jsx'
@@ -410,11 +412,25 @@ export function Inventory({ user }) {
   const [promos, setPromos] = useState(false)
   const [importing, setImporting] = useState(false)
   const [bulk, setBulk] = useState(false)
+  const [scanMode, setScanMode] = useState(false)
+  const [miss, setMiss] = useState(null) // מסנן "חסר מידע"
+  const [sel, setSel] = useState(() => new Set())
   const [counts, setCounts] = useState({})
   const products = useMemo(() => list('product'), [v])
   const suppliers = new Map(list('supplier').map((s) => [s.id, s.name]))
+  useEffect(() => {
+    retryTempNames()
+  }, [])
+  const missCounts = useMemo(() => {
+    const act = products.filter((p) => p.active !== false)
+    const o = {}
+    for (const m of MISSING) o[m.key] = act.filter((p) => m.test(p)).length
+    return o
+  }, [products, v])
+  const missDef = MISSING.find((m) => m.key === miss)
   const shown = products
     .filter((p) => (filter === 'inactive' ? p.active === false : p.active !== false))
+    .filter((p) => !missDef || missDef.test(p))
     .filter((p) => filter !== 'low' || stockOf(p.id) <= (Number(p.minStock) || 0))
     .filter((p) => !q || p.name.includes(q) || productCodes(p).some((c) => c.includes(q)) || (p.category || '').includes(q))
     .sort((a, b) => (a.category || '').localeCompare(b.category || '', 'he') || a.name.localeCompare(b.name, 'he'))
@@ -458,6 +474,9 @@ export function Inventory({ user }) {
               📋 ספירת מלאי
             </button>
           )}
+          <button className="btn primary" onClick={() => setScanMode(true)}>
+            📦 קליטה בסורק
+          </button>
           <button className="btn" onClick={() => setImporting(true)}>
             📥 ייבוא מאקסל
           </button>
@@ -489,10 +508,38 @@ export function Inventory({ user }) {
           <option value="inactive">לא פעילים</option>
         </select>
       </div>
+      <div className="miss-chips">
+        {MISSING.filter((m) => missCounts[m.key] > 0).map((m) => (
+          <button key={m.key} className={'miss-chip' + (miss === m.key ? ' on' : '') + (m.warn ? ' warn' : '')} onClick={() => (setMiss(miss === m.key ? null : m.key), setSel(new Set()))}>
+            {missCounts[m.key]} {m.label}
+          </button>
+        ))}
+        {miss === 'pendingName' && missCounts.pendingName > 0 && (
+          <button
+            className="btn small green"
+            onClick={async () => {
+              if (!(await confirmDlg(`לאשר את כל ${missCounts.pendingName} השמות שנמצאו ברשת?`, '✓ אשר הכול', 'ביטול', 'primary'))) return
+              for (const p of products.filter((x) => x.nameStatus === 'web')) approveName(p)
+              toast('✓ השמות אושרו')
+            }}
+          >
+            ✓ אשר את כל השמות מהרשת
+          </button>
+        )}
+      </div>
+      {sel.size > 0 && <BulkAssign ids={sel} onDone={() => setSel(new Set())} />}
       <div className="table-wrap">
         <table className="inv">
           <thead>
             <tr>
+              <th>
+                <input
+                  type="checkbox"
+                  title="סמן הכול"
+                  checked={shown.length > 0 && shown.every((p) => sel.has(p.id))}
+                  onChange={(e) => setSel(e.target.checked ? new Set(shown.map((p) => p.id)) : new Set())}
+                />
+              </th>
               <th></th>
               <th>מוצר</th>
               <th>קטגוריה</th>
@@ -510,12 +557,32 @@ export function Inventory({ user }) {
               const st = stockOf(p.id)
               const low = st <= (Number(p.minStock) || 0)
               return (
-                <tr key={p.id}>
+                <tr key={p.id} className={sel.has(p.id) ? 'sel' : ''}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={sel.has(p.id)}
+                      onChange={(e) => {
+                        const n = new Set(sel)
+                        e.target.checked ? n.add(p.id) : n.delete(p.id)
+                        setSel(n)
+                      }}
+                    />
+                  </td>
                   <td>
                     <ProductThumb p={p} size={36} />
                   </td>
                   <td>
                     <b>{p.name}</b>
+                    {p.nameStatus === 'web' && (
+                      <span className="tag web">
+                        🌐 מהרשת, לא אושר{' '}
+                        <button className="link" onClick={() => approveName(p)}>
+                          ✓ אשר
+                        </button>
+                      </span>
+                    )}
+                    {p.nameStatus === 'temp' && <span className="tag temp">חסר שם</span>}
                     {p.barcode && (
                       <div className="muted small">
                         {p.barcode}
@@ -524,9 +591,9 @@ export function Inventory({ user }) {
                     )}
                   </td>
                   <td>{p.category}</td>
-                  <td>{money(p.price)}</td>
-                  <td>{p.staffPrice !== '' && p.staffPrice != null ? money(p.staffPrice) : '—'}</td>
-                  <td>{p.cost ? money(p.cost) : '—'}</td>
+                  <td>{miss === 'price' ? <InlineNum p={p} field="price" /> : money(p.price)}</td>
+                  <td>{miss === 'staffPrice' ? <InlineNum p={p} field="staffPrice" /> : p.staffPrice !== '' && p.staffPrice != null ? money(p.staffPrice) : '—'}</td>
+                  <td>{miss === 'cost' ? <InlineNum p={p} field="cost" /> : p.cost ? money(p.cost) : '—'}</td>
                   <td>
                     <b className={st <= 0 ? 'neg' : low ? 'warn' : ''}>{st}</b>
                   </td>
@@ -566,6 +633,11 @@ export function Inventory({ user }) {
       {priceList && <PriceList onClose={() => setPriceList(false)} />}
       {promos && <Promos onClose={() => setPromos(false)} />}
       {bulk && <BulkCategory user={user} onClose={() => setBulk(false)} />}
+      {scanMode && (
+        <div className="wh-overlay">
+          <Receive user={user} onClose={() => setScanMode(false)} onEditProduct={(p) => setEdit(p)} />
+        </div>
+      )}
       {importing && <ImportProducts user={user} onClose={() => setImporting(false)} />}
     </div>
   )
@@ -626,6 +698,8 @@ function ProductEditor({ p, user, onClose }) {
       minStock: Number(f.minStock) || 0,
       parStock: Number(f.parStock) || 0,
       category: (f.category || 'כללי').trim(),
+      nameStatus: 'ok', // נשמר בעריכה = נבדק ואושר
+      ...(f.img && f.imgStatus === 'web' ? { imgStatus: 'ok' } : {}),
     })
     if (!p.id && Number(initStock)) receiveStock(rec.id, Number(initStock), user.id, 'receive')
     toast('נשמר')
@@ -668,7 +742,26 @@ function ProductEditor({ p, user, onClose }) {
       </div>
       <div className="form-grid">
         <Field label="שם המוצר">
-          <input value={f.name || ''} onChange={set('name')} autoFocus />
+          <div className="row gap-s">
+            <input value={f.name || ''} onChange={set('name')} autoFocus />
+            {f.barcode && (
+              <button
+                type="button"
+                className="btn small"
+                title="חיפוש שם לפי הברקוד ברשת"
+                onClick={async () => {
+                  toast('מחפש…')
+                  const r = await lookupBarcode(f.barcode)
+                  if (r.status === 'found') {
+                    setF((pp) => ({ ...pp, name: r.name, ...(r.image && !pp.img ? { img: r.image } : {}) }))
+                    toast('✓ נמצא: ' + r.name)
+                  } else toast(r.status === 'error' ? 'אין חיבור לשירות החיפוש — נסה שוב מאוחר יותר' : 'לא נמצא שם לברקוד הזה', 'err')
+                }}
+              >
+                🌐
+              </button>
+            )}
+          </div>
         </Field>
         <Field label="קטגוריה">
           <input value={f.category || ''} onChange={set('category')} list="cats" placeholder="שתייה / חטיפים…" />
@@ -1196,5 +1289,94 @@ function BulkCategory({ user, onClose }) {
         </>
       )}
     </Modal>
+  )
+}
+
+// ---------- "חסר מידע" — מסננים למנהל ----------
+// "חסר" = ריק או 0. קטגוריה "כללי" (ברירת המחדל כשלא נבחרה קטגוריה) נחשבת "ללא קטגוריה".
+const num = (v) => Number(v) || 0
+const MISSING = [
+  { key: 'pendingName', label: 'שמות מהרשת לאישור', test: (p) => p.nameStatus === 'web' },
+  { key: 'name', label: 'חסרי שם', test: (p) => p.nameStatus === 'temp' || !String(p.name || '').trim(), warn: true },
+  { key: 'cost', label: 'חסרי מחיר עלות', test: (p) => num(p.cost) <= 0 },
+  { key: 'price', label: 'חסרי מחיר מכירה', test: (p) => num(p.price) <= 0, warn: true },
+  { key: 'staffPrice', label: 'בלי מחיר מוכרים קבוע', test: (p) => p.staffPrice === '' || p.staffPrice == null || num(p.staffPrice) <= 0 },
+  { key: 'supplier', label: 'ללא ספק', test: (p) => !p.supplierId || !get('supplier', p.supplierId) },
+  { key: 'category', label: 'ללא קטגוריה', test: (p) => !String(p.category || '').trim() || String(p.category).trim() === 'כללי' },
+  { key: 'barcode', label: 'ללא ברקוד', test: (p) => !productCodes(p).length },
+  { key: 'img', label: 'ללא תמונה', test: (p) => !p.img },
+  { key: 'minStock', label: 'בלי מלאי מינימום', test: (p) => num(p.minStock) <= 0 },
+  { key: 'negative', label: 'מלאי שלילי', test: (p) => stockOf(p.id) < 0, warn: true },
+  { key: 'belowMin', label: 'מתחת למינימום', test: (p) => num(p.minStock) > 0 && stockOf(p.id) < num(p.minStock), warn: true },
+]
+
+// עריכה ישירה בשורה (עלות / מחיר / מחיר מוכרים)
+function InlineNum({ p, field }) {
+  const [v, setV] = useState(p[field] === '' || p[field] == null ? '' : String(p[field]))
+  const commit = () => {
+    const n = Number(v)
+    if (v === '' || !(n > 0)) return
+    if (n !== Number(p[field])) {
+      save('product', { ...get('product', p.id), [field]: round2(n) })
+      toast('נשמר')
+    }
+  }
+  return (
+    <input
+      className="count-in"
+      inputMode="decimal"
+      value={v}
+      placeholder="₪"
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && (commit(), e.currentTarget.blur())}
+    />
+  )
+}
+
+// עריכה קבוצתית: ספק / קטגוריה / אישור שמות לכמה מוצרים בבת אחת
+function BulkAssign({ ids, onDone }) {
+  const suppliers = list('supplier')
+  const cats = [...new Set(list('product').map((p) => p.category).filter((c) => c && c !== 'כללי'))].sort((a, b) => a.localeCompare(b, 'he'))
+  const [sup, setSup] = useState('')
+  const [cat, setCat] = useState('')
+  const apply = (patch, msg) => {
+    for (const id of ids) {
+      const p = get('product', id)
+      if (p) save('product', { ...p, ...patch(p) })
+    }
+    toast(`✓ ${msg} ל-${ids.size} מוצרים`)
+    onDone()
+  }
+  return (
+    <div className="bulk-bar">
+      <b>{ids.size} מסומנים</b>
+      <select value={sup} onChange={(e) => setSup(e.target.value)}>
+        <option value="">ספק…</option>
+        {suppliers.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </select>
+      <button className="btn small" disabled={!sup} onClick={() => apply(() => ({ supplierId: sup }), 'הספק עודכן')}>
+        קבע ספק
+      </button>
+      <input list="bulk-cats" placeholder="קטגוריה…" value={cat} onChange={(e) => setCat(e.target.value)} />
+      <datalist id="bulk-cats">
+        {cats.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+      <button className="btn small" disabled={!cat.trim()} onClick={() => apply(() => ({ category: cat.trim() }), 'הקטגוריה עודכנה')}>
+        קבע קטגוריה
+      </button>
+      <button className="btn small" onClick={() => apply((p) => ({ nameStatus: p.nameStatus === 'temp' ? 'temp' : 'ok', ...(p.imgStatus === 'web' ? { imgStatus: 'ok' } : {}) }), 'השמות אושרו')}>
+        ✓ אשר שמות
+      </button>
+      <button className="btn small" onClick={onDone}>
+        ביטול סימון
+      </button>
+    </div>
   )
 }
