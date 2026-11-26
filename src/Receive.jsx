@@ -7,9 +7,11 @@
 // כל שינוי מלאי נרשם בתנועות המלאי עם מי / מתי / כמה / מצב / מקור (סורק / ידני / ברקודי ספרות).
 // ============================================================
 import { useEffect, useRef, useState } from 'react'
-import { list, get, save, uid, round2, stockOf, productHasCode } from './db.js'
+import { list, get, save, uid, round2, stockOf, productHasCode, similarProducts } from './db.js'
 import { toast, Field, ProductThumb, confirmDlg, useVersion } from './ui.jsx'
 import { lookupBarcode, tempName, applyWebName, retryTempNames } from './lookup.js'
+import { useScanTarget } from './scan.js'
+import { askSimilar } from './BarcodeMatch.jsx'
 
 // ---------- צלילים ----------
 let actx = null
@@ -34,70 +36,6 @@ function beep(kind = 'ok') {
   } catch {}
 }
 
-// ---------- מאזין סורק גלובלי ----------
-// תו לפי המקש הפיזי — כך ברקוד פקודה (אותיות) נקלט נכון גם כשהמקלדת בעברית
-function keyChar(e) {
-  const c = e.code || ''
-  if (c.startsWith('Key')) return e.shiftKey || e.getModifierState?.('CapsLock') ? c.slice(3) : c.slice(3).toLowerCase()
-  if (c.startsWith('Digit')) return c.slice(5)
-  if (c.startsWith('Numpad') && /\d$/.test(c)) return c.slice(-1)
-  if (c === 'Minus' || c === 'NumpadSubtract') return '-'
-  if (c === 'Period' || c === 'NumpadDecimal') return '.'
-  return e.key && e.key.length === 1 ? e.key : ''
-}
-function setNativeValue(el, value) {
-  const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
-  Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value)
-  el.dispatchEvent(new Event('input', { bubbles: true }))
-}
-const GAP = 50 // מ"ש בין תווים — מהר יותר מזה = סורק
-
-export function useWarehouseScanner(onScan, enabled = true) {
-  const cb = useRef(onScan)
-  cb.current = onScan
-  useEffect(() => {
-    if (!enabled) return
-    const st = { buf: '', last: 0, fast: 0, el: null, snap: null }
-    const h = (e) => {
-      if (e.ctrlKey || e.altKey || e.metaKey) return
-      const now = e.timeStamp || performance.now()
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        if (st.fast >= 2 && st.buf.length >= 3 && now - st.last < 150) {
-          e.preventDefault()
-          e.stopPropagation()
-          const code = st.buf
-          st.buf = ''
-          st.fast = 0
-          cb.current(code, 'scanner')
-        }
-        st.buf = ''
-        st.fast = 0
-        return
-      }
-      const ch = keyChar(e)
-      if (!ch) return
-      if (now - st.last > GAP) {
-        // אולי הקלדה ידנית — נותנים לתו להיכנס, אבל שומרים מה היה בשדה לפני
-        st.buf = ch
-        st.fast = 0
-        const t = e.target
-        st.el = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') ? t : null
-        st.snap = st.el ? st.el.value : null
-      } else {
-        // סורק: התו לא נכנס לשום שדה
-        e.preventDefault()
-        e.stopPropagation()
-        st.buf += ch
-        st.fast++
-        if (st.fast === 1 && st.el && st.snap != null && st.el.value !== st.snap) setNativeValue(st.el, st.snap) // מוציאים את התו הראשון שנכנס לשדה
-      }
-      st.last = now
-    }
-    window.addEventListener('keydown', h, true)
-    return () => window.removeEventListener('keydown', h, true)
-  }, [enabled])
-}
-
 // ---------- המסך ----------
 const MODE_KEY = 'tt_wh_mode'
 const MODES = { count: { label: 'מצב ספירה — כל סריקה מוסיפה 1', cls: 'wh-count' }, receive: { label: 'מצב קליטה — סריקה, כמות, אישור', cls: 'wh-receive' } }
@@ -118,7 +56,22 @@ export default function Receive({ user, onClose, onEditProduct }) {
   const [msg, setMsg] = useState(null) // {text, kind, code?}
   const [flash, setFlash] = useState(false)
   const busy = useRef(false)
+  const similarAsked = useRef(new Set())
   const codeRef = useRef(null)
+  // הכנסה מהירה: רק שם + ברקוד, כמויות ומחירים אחר כך
+  const [quick, setQuickRaw] = useState(() => {
+    try {
+      return localStorage.getItem('tt_wh_quick') === '1'
+    } catch {
+      return false
+    }
+  })
+  const setQuick = (x) => {
+    setQuickRaw(x)
+    try {
+      localStorage.setItem('tt_wh_quick', x ? '1' : '0')
+    } catch {}
+  }
   const qtyRef = useRef(null)
   const costRef = useRef(null)
   const priceRef = useRef(null)
@@ -173,7 +126,19 @@ export default function Receive({ user, onClose, onEditProduct }) {
       setMsg({ text: 'קודם סרוק ברקוד פקודה (ספירה / קליטה) או בחר מצב בכפתורים', kind: 'err' })
       return
     }
-    const p = findByCode(v)
+    let p = findByCode(v)
+    if (!p && !similarAsked.current.has(v)) {
+      // ברקוד דומה למוצר קיים? שואלים לפני שממשיכים (למשל ברקוד חתוך מקבלה)
+      const r = askSimilar(v, { userId: user.id, newLabel: 'לא — זה מוצר חדש' })
+      r.then((res) => {
+        if (!res) return
+        similarAsked.current.add(v)
+        if (res.action === 'use' || res.action === 'new') onScan(v, source)
+      })
+      if (similarProducts(v).length) return
+    }
+    similarAsked.current.delete(v)
+    p = findByCode(v)
     if (mode === 'count') {
       if (!p) {
         beep('err')
@@ -186,23 +151,27 @@ export default function Receive({ user, onClose, onEditProduct }) {
       setCode('')
       return
     }
+    // הכנסה מהירה: סריקה של מוצר הבא שומרת אוטומטית את הקודם
+    let autoSaved = false
+    if (quick && cur && cur.code !== v && (!cur.pid || cur.qty)) autoSaved = confirm('auto') === true
     // mode === 'receive' — לא דורסים קליטה פתוחה בשקט
-    if (cur && cur.qty && cur.code !== v) {
+    else if (cur && cur.qty && cur.code !== v) {
       beep('err')
       setMsg({ text: `יש קליטה פתוחה (${cur.code}) — אשר או בטל לפני סריקה של מוצר אחר`, kind: 'err' })
       return
     }
-    startReceive(v, p)
+    startReceive(v, p, autoSaved)
   }
 
-  function startReceive(v, p) {
+  function startReceive(v, p, keepMsg = false) {
     beep('ok')
-    setMsg(null)
+    if (!keepMsg) setMsg(null)
     const c = { code: v, pid: p?.id || null, qty: '', cost: '', price: '', name: '', nameSrc: '', img: '', looking: !p }
     setCur(c)
     setTimeout(() => {
-      qtyRef.current?.focus()
-      qtyRef.current?.select()
+      const r = quick && !p ? nameRef : qtyRef
+      r.current?.focus()
+      r.current?.select?.()
     }, 30)
     if (!p) {
       const known = list('product', true).find((x) => x.deleted && productHasCode(x, v)) // מוצר שנמחק בעבר — מציעים את שמו
@@ -237,8 +206,8 @@ export default function Receive({ user, onClose, onEditProduct }) {
 
   function confirm(srcHint) {
     if (!cur || busy.current) return
-    const qty = Number(cur.qty)
-    if (!Number.isInteger(qty) || qty <= 0) {
+    const qty = Number(cur.qty || 0)
+    if (!Number.isInteger(qty) || qty < 0 || (qty === 0 && !quick)) {
       beep('err')
       setMsg({ text: 'כמות חייבת להיות מספר שלם חיובי', kind: 'err' })
       qtyRef.current?.focus()
@@ -248,12 +217,12 @@ export default function Receive({ user, onClose, onEditProduct }) {
     if (!p) {
       const cost = Number(cur.cost)
       const price = Number(cur.price)
-      if (!(cost > 0)) {
+      if (!quick && !(cost > 0)) {
         beep('err')
         setMsg({ text: 'מוצר חדש — חובה מחיר עלות', kind: 'err' })
         return costRef.current?.focus()
       }
-      if (!(price > 0)) {
+      if (!quick && !(price > 0)) {
         beep('err')
         setMsg({ text: 'מוצר חדש — חובה מחיר מכירה', kind: 'err' })
         return priceRef.current?.focus()
@@ -270,8 +239,8 @@ export default function Receive({ user, onClose, onEditProduct }) {
         nameStatus,
         barcode: cur.code,
         barcodes: [],
-        cost: round2(cost),
-        price: round2(price),
+        cost: cost > 0 ? round2(cost) : '',
+        price: price > 0 ? round2(price) : '',
         staffPrice: '',
         category: '',
         active: true,
@@ -281,15 +250,18 @@ export default function Receive({ user, onClose, onEditProduct }) {
       if (nameStatus === 'temp') applyWebName(p.id, cur.code) // ממשיך לחפש ברקע
     } else busy.current = true
     const src = cur.qtySrc === 'digits' ? 'digits' : srcHint === 'digits' ? 'digits' : 'manual'
-    stockMove(p, qty, src, 'receive')
+    if (qty > 0) stockMove(p, qty, src, 'receive')
+    else addToSession(p, 0, null)
     beep('save')
-    setMsg({ text: `✓ ${p.name}: +${qty} · במלאי עכשיו ${stockOf(p.id)}`, kind: 'ok' })
+    const missing = [!(Number(p.price) > 0) && 'מחיר', !(Number(p.cost) > 0) && 'עלות', qty === 0 && 'כמות'].filter(Boolean)
+    setMsg({ text: qty > 0 ? `✓ ${p.name}: +${qty} · במלאי עכשיו ${stockOf(p.id)}` : `✓ ${p.name} נשמר` + (missing.length ? ` (בלי ${missing.join(' / ')} — להשלים אחר כך ב"חסר מידע")` : ''), kind: 'ok' })
     setCur(null)
     setCode('')
     setTimeout(() => {
       busy.current = false
-      codeRef.current?.focus()
+      if (srcHint !== 'auto') codeRef.current?.focus() // באוטומטי — כבר עובר למוצר הבא
     }, 250) // debounce — מונע שמירה כפולה
+    return true
   }
 
   async function undo(row, moveIdx = null) {
@@ -297,7 +269,7 @@ export default function Receive({ user, onClose, onEditProduct }) {
     const qty = moves.reduce((a, m) => a + m.qty, 0)
     if (moveIdx === 'all' && !(await confirmDlg(`לבטל את כל ה-${qty} שנוספו ל"${row.name}" בסשן הזה?`, 'בטל'))) return
     const p = get('product', row.pid)
-    if (p) save('stock', { productId: p.id, qty: -qty, reason: 'undo', userId: user.id, source: 'manual', ref: moves.map((m) => m.id).join(',') })
+    if (p && qty) save('stock', { productId: p.id, qty: -qty, reason: 'undo', userId: user.id, source: 'manual', ref: moves.map((m) => m.id).join(',') })
     setSession((s) =>
       s
         .map((x) => (x.pid !== row.pid ? x : { ...x, added: x.added - qty, moves: moveIdx == null ? x.moves.slice(0, -1) : [] }))
@@ -312,7 +284,7 @@ export default function Receive({ user, onClose, onEditProduct }) {
     undo(row)
   }
 
-  useWarehouseScanner(onScan, true)
+  useScanTarget(onScan, true, 2)
 
   const p = cur?.pid ? get('product', cur.pid) : null
   const isNew = cur && !p
@@ -339,6 +311,9 @@ export default function Receive({ user, onClose, onEditProduct }) {
               יציאה ממצב
             </button>
           )}
+          <button className={'btn small' + (quick ? ' on' : '')} title="מכניסים עכשיו רק שם וברקוד; כמויות ומחירים משלימים אחר כך" onClick={() => setQuick(!quick)}>
+            ⚡ הכנסה מהירה {quick ? '(פעיל)' : ''}
+          </button>
           <button className="btn small" onClick={() => printCommandSheet().catch((e) => toast(e.message, 'err'))}>
             🖨 דף ברקודי פקודה
           </button>
@@ -401,15 +376,15 @@ export default function Receive({ user, onClose, onEditProduct }) {
                 </div>
               </div>
               <div className="wh-fields">
-                <Field label="כמות *">
-                  <input ref={qtyRef} className="big-input" inputMode="numeric" value={cur.qty} onChange={(e) => setCur({ ...cur, qty: e.target.value.replace(/\D/g, ''), qtySrc: 'manual' })} onKeyDown={enterNext(isNew ? costRef : null)} />
+                <Field label={quick ? 'כמות (לא חובה)' : 'כמות *'}>
+                  <input ref={qtyRef} className="big-input" inputMode="numeric" value={cur.qty} onChange={(e) => setCur({ ...cur, qty: e.target.value.replace(/\D/g, ''), qtySrc: 'manual' })} onKeyDown={enterNext(isNew ? (quick ? nameRef : costRef) : null)} />
                 </Field>
                 {isNew && (
                   <>
-                    <Field label="מחיר עלות ₪ *">
+                    <Field label={quick ? 'מחיר עלות ₪ (לא חובה)' : 'מחיר עלות ₪ *'}>
                       <input ref={costRef} inputMode="decimal" value={cur.cost} onChange={(e) => setCur({ ...cur, cost: e.target.value })} onKeyDown={enterNext(priceRef)} />
                     </Field>
-                    <Field label="מחיר מכירה ₪ *">
+                    <Field label={quick ? 'מחיר מכירה ₪ (לא חובה)' : 'מחיר מכירה ₪ *'}>
                       <input ref={priceRef} inputMode="decimal" value={cur.price} onChange={(e) => setCur({ ...cur, price: e.target.value })} onKeyDown={enterNext(null)} />
                     </Field>
                     <Field label={cur.looking ? 'שם — מחפש ברשת…' : cur.nameSrc === 'web' ? 'שם (נמצא ברשת — אפשר לשנות)' : cur.nameSrc === 'known' ? 'שם (ממוצר קודם)' : 'שם (לא נמצא ברשת — לא חובה)'}>

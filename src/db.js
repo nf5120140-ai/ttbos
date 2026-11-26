@@ -5,7 +5,7 @@
 // שעובדים בלי אינטרנט במקביל לא דורסים זה את זה.
 // ============================================================
 
-export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice', 'promo', 'device', 'kevent']
+export const KINDS = ['product', 'customer', 'user', 'supplier', 'sale', 'wallet', 'stock', 'count', 'order', 'payment', 'setting', 'invoice', 'promo', 'device', 'kevent', 'audit']
 
 // מצב הדגמה: ttbos.vercel.app/?demo — נתוני דוגמה, בלי שרת, במסד נפרד שלא נוגע בנתונים האמיתיים
 export const DEMO = (() => {
@@ -568,4 +568,93 @@ export async function resetLocalData() {
       }
     })
   emit(false)
+}
+
+// ---------- ברקודים קצרים / משובשים ----------
+export const digitsOf = (v) => String(v ?? '').replace(/\.0+$/, '').replace(/\D/g, '')
+
+/** ברקוד תקני (EAN-8 / UPC-A / EAN-13 / GTIN-14) עם ספרת ביקורת נכונה */
+export function gtinValid(code) {
+  const d = digitsOf(code)
+  if (![8, 12, 13, 14].includes(d.length) || d !== String(code).trim()) return false
+  let sum = 0
+  for (let i = d.length - 2, w = 3; i >= 0; i--, w = w === 3 ? 1 : 3) sum += Number(d[i]) * w
+  return (10 - (sum % 10)) % 10 === Number(d[d.length - 1])
+}
+
+/**
+ * מוצרים עם ברקוד "דומה": אחד הוא סוף של השני (ברקוד חתוך, למשל 8753111 מול 7290008753111),
+ * או ש-5 הספרות האחרונות זהות. לא כולל התאמה מדויקת.
+ */
+export function similarProducts(code, exceptId = null) {
+  const d = digitsOf(code)
+  if (d.length < 5) return []
+  const out = []
+  for (const p of list('product')) {
+    if (p.id === exceptId) continue
+    for (const c of productCodes(p)) {
+      const cd = digitsOf(c)
+      if (!cd || cd.replace(/^0+/, '') === d.replace(/^0+/, '')) continue
+      const suffix = cd.length >= 5 && (d.endsWith(cd) || cd.endsWith(d))
+      if (suffix || cd.slice(-5) === d.slice(-5)) {
+        out.push({ p, code: c, why: suffix ? 'suffix' : 'last5' })
+        break
+      }
+    }
+  }
+  return out.sort((a, b) => (a.why === b.why ? 0 : a.why === 'suffix' ? -1 : 1))
+}
+
+/** יומן שינויים (מיזוג / תיקון ברקוד / מחיקה) */
+export function audit(action, details, userId) {
+  return save('audit', { action, ...details, userId: userId || null })
+}
+
+/** תיקון ברקוד: מחליף את הברקוד הדומה (הקצר / המשובש) בברקוד החדש */
+export function fixBarcode(productId, oldCode, newCode, userId) {
+  const p = get('product', productId)
+  if (!p) return null
+  const extras = (p.barcodes || []).filter((c) => c !== oldCode)
+  const patch = p.barcode === oldCode || !p.barcode ? { barcode: newCode, barcodes: extras } : { barcodes: [...extras, newCode] }
+  const rec = save('product', { ...p, ...patch })
+  audit('barcode_fix', { productId, productName: p.name, oldCode, newCode }, userId)
+  return rec
+}
+
+/**
+ * מיזוג מוצרים: המלאי של המוצר המוסר עובר למוצר שנשאר, שדות חסרים מושלמים,
+ * והמוצר המוסר נמחק. המכירות הישנות נשארות בדוחות (עם השם ששמור בהן).
+ */
+export function mergeProducts(keepId, dropId, userId, { keepDropCode = false } = {}) {
+  const keep = get('product', keepId)
+  const drop = get('product', dropId)
+  if (!keep || !drop || keepId === dropId) return null
+  const moved = stockOf(dropId)
+  if (moved !== 0) {
+    save('stock', { productId: dropId, qty: -moved, reason: 'merge_out', ref: keepId, userId })
+    save('stock', { productId: keepId, qty: moved, reason: 'merge_in', ref: dropId, userId })
+  }
+  const fill = {}
+  for (const k of ['cost', 'price', 'staffPrice', 'supplierId', 'category', 'img', 'minStock', 'priceGroup'])
+    if ((keep[k] === '' || keep[k] == null || keep[k] === 0 || (k === 'category' && keep[k] === 'כללי')) && drop[k] !== '' && drop[k] != null) fill[k] = drop[k]
+  const codes = keepDropCode ? productCodes(drop).filter((c) => !productCodes(keep).includes(c)) : []
+  save('product', { ...keep, ...fill, ...(codes.length ? { barcodes: [...(keep.barcodes || []), ...codes] } : {}) })
+  remove('product', dropId)
+  audit('merge', { productId: keepId, productName: keep.name, droppedId: dropId, droppedName: drop.name, droppedCodes: productCodes(drop), stockMoved: moved }, userId)
+  return get('product', keepId)
+}
+
+/** זוגות מוצרים עם ברקודים דומים (לכלי "כפילויות ברקוד") */
+export function similarPairs() {
+  const seen = new Set()
+  const pairs = []
+  for (const p of list('product'))
+    for (const c of productCodes(p))
+      for (const m of similarProducts(c, p.id)) {
+        const k = [p.id, m.p.id].sort().join('|')
+        if (seen.has(k)) continue
+        seen.add(k)
+        pairs.push({ a: p, aCode: c, b: m.p, bCode: m.code, why: m.why })
+      }
+  return pairs
 }

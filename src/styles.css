@@ -1981,3 +1981,70 @@ table.inv tr.sel td { background: #f3f7ff; }
 tr.dim td { opacity: .5; }
 .miss-chip.view { border-style: dashed; }
 .bulk-bar .sep { width: 1px; align-self: stretch; background: #e3d39b; margin: 0 4px; }
+
+/* מחירון — סוג עם מחיר שונה: שורה צמודה מתחת לקבוצה */
+.pl-row.pl-sub {
+  padding-inline-start: 18px;
+  font-size: 0.92em;
+}
+.pl-row.pl-sub .pl-name::before {
+  content: '↳ ';
+  opacity: 0.55;
+}
+
+/* כפילויות ברקוד */
+.dup-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line, #e5e7eb);
+}
+.dup-side {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.dup-side.keep {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+.btn.warn {
+  border-color: #f59e0b;
+}
+@media (max-width: 700px) {
+  .dup-row {
+    grid-template-columns: 1fr;
+  }
+}
+.inv-bc-in {
+  margin-top: 4px;
+  font-size: 0.85em;
+  padding: 3px 6px;
+  max-width: 170px;
+}
+.inv-bc {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 0.9em;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #f1f5f9;
+}
+.inv-bc.warn {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+}
+.dup-side input[type='radio'] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+}

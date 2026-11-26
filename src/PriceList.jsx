@@ -50,10 +50,21 @@ export function PriceList({ onClose }) {
       byGroup.get(g).variants.push(p)
     }
     for (const r of byGroup.values()) {
-      const prices = r.variants.map((x) => Number(x.price))
-      r.minPrice = Math.min(...prices)
-      r.maxPrice = Math.max(...prices)
-      r.price = r.minPrice
+      // אין טווח מחירים: השורה של הקבוצה = המחיר של רוב הסוגים.
+      // סוג עם מחיר אחר יוצא מהקבוצה ומוצג כשורה נפרדת צמודה מתחתיה, עם השם והמחיר שלו.
+      const byPrice = new Map()
+      for (const x of r.variants) {
+        const k = Number(x.price)
+        if (!byPrice.has(k)) byPrice.set(k, [])
+        byPrice.get(k).push(x)
+      }
+      const [mainPrice, main] = [...byPrice.entries()].sort((a, b) => b[1].length - a[1].length || a[0] - b[0])[0]
+      r.subs = r.variants
+        .filter((x) => Number(x.price) !== mainPrice)
+        .sort((a, b) => a.name.localeCompare(b.name, 'he'))
+        .map((x) => ({ ...x, variants: [x], sub: true }))
+      r.variants = main
+      r.price = mainPrice
       const st = r.variants.map((x) => (x.staffPrice === '' || x.staffPrice == null ? null : Number(x.staffPrice)))
       r.staffPrice = st.every((x) => x != null && x === st[0]) ? st[0] : ''
       r.img = r.variants.find((x) => x.img)?.img || r.img
@@ -63,6 +74,8 @@ export function PriceList({ onClose }) {
     }
     return out.sort((a, b) => a.name.localeCompare(b.name, 'he'))
   }, [v])
+  // כל השורות כולל שורות-המשנה (לבדיקות מחירי מוכרים וכו')
+  const allRows = useMemo(() => products.flatMap((p) => [p, ...(p.subs || [])]), [products])
   const groups = useMemo(() => {
     if (o.mode === 'abc') {
       // לפי אות ראשונה
@@ -83,7 +96,7 @@ export function PriceList({ onClose }) {
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], 'he'))
   }, [products, o.mode])
 
-  const hasStaff = products.some((p) => p.staffPrice !== '' && p.staffPrice != null && Number(p.staffPrice) !== Number(p.price))
+  const hasStaff = allRows.some((p) => p.staffPrice !== '' && p.staffPrice != null && Number(p.staffPrice) !== Number(p.price))
 
   function doPrint() {
     document.body.classList.add('pl-printing')
@@ -165,8 +178,8 @@ export function PriceList({ onClose }) {
               {groups.map(([name, items]) => (
                 <section key={name} className={'pl-group' + (o.mode === 'abc' ? ' abc' : '')}>
                   <h2>{name}</h2>
-                  {items.map((p) => (
-                    <div className="pl-row" key={p.id}>
+                  {items.flatMap((p) => [p, ...(p.subs || [])]).map((p) => (
+                    <div className={'pl-row' + (p.sub ? ' pl-sub' : '')} key={p.id}>
                       {o.icons && <ProductThumb p={p} size={o.big ? 30 : 24} />}
                       <span className="pl-name">
                         {p.name}
@@ -177,7 +190,7 @@ export function PriceList({ onClose }) {
                         {p.variants.length > 1 ? (
                           <>
                             {p.groupPromoUnit != null && <span className="pl-promo">מבצע {money(p.groupPromoUnit)} </span>}
-                            {p.minPrice === p.maxPrice ? money(p.price) : `${money(p.minPrice)}–${money(p.maxPrice)}`}
+                            {money(p.price)}
                           </>
                         ) : (
                           <>

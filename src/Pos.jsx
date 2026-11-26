@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { publishDisplay, listenHello } from './display.js'
 import { openDrawer, openDrawerManual, drawerCfg } from './drawer.js'
-import { list, get, getSetting, uid, sameCode, productHasCode, productCodes, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
+import { useScanTarget } from './scan.js'
+import { askSimilar } from './BarcodeMatch.jsx'
+import { list, get, getSetting, uid, similarProducts, sameCode, productHasCode, productCodes, balanceOf, stockOf, sell, buildSale, voidSale, deviceId, round2 } from './db.js'
 import { CreditModal, TerminalModal, creditStatus, paymentLabel } from './Credit.jsx'
 import { VerifyStaffModal, staffMethodLabel } from './Staff.jsx'
 import { priceCart, unitPromoFor, bundlesFor, staffUnit, livePromos, promoLabel } from './pricing.js'
@@ -169,11 +171,16 @@ export default function Pos({ user }) {
   }
 
   function add(p, n = 1) {
+    if (n > 0 && !p.general && !(Number(p.price) > 0)) {
+      toast(`ל"${p.name}" עדיין אין מחיר מכירה — עדכן בניהול ← מלאי`, 'err')
+      return false
+    }
     setCart((c) => {
       const ex = c.find((x) => x.productId === p.id)
       if (ex) return c.map((x) => (x.productId === p.id ? { ...x, qty: x.qty + n } : x)).filter((x) => x.qty > 0)
       return n > 0 ? [...c, { productId: p.id, qty: n }] : c
     })
+    return true
   }
   function selectCustomer(c) {
     setCustomerId(c?.id || null)
@@ -196,8 +203,7 @@ export default function Pos({ user }) {
     code = String(code).trim()
     const p = products.find((x) => productHasCode(x, code))
     if (p) {
-      add(p)
-      toast('➕ ' + p.name)
+      if (add(p)) toast('➕ ' + p.name)
       return true
     }
     const c = list('customer').find((x) => sameCode(x.card, code))
@@ -206,11 +212,17 @@ export default function Pos({ user }) {
       toast('👤 ' + c.name)
       return true
     }
-    toast('לא נמצא ברקוד ' + code, 'err')
-    return false
+    // ברקוד דומה (למשל חתוך) — שואלים "האם התכוונת ל…"
+    askSimilar(code, { userId: user.id, allowNew: false }).then((r) => {
+      if (r?.action === 'use') {
+        if (add(r.product)) toast('➕ ' + r.product.name)
+      } else if (!r) toast('לא נמצא ברקוד ' + code, 'err')
+    })
+    if (!similarProducts(code).length) return false
+    return true
   }
   const scanField = useScanField(q, setQ, handleCode)
-  useBarcodeScanner(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen && !verifyFor && !genOpen)
+  useScanTarget(handleCode, !picker && !cashModal && !cam && !creditOpen && !terminalOpen && !verifyFor && !genOpen, 0)
 
   function items() {
     return lines.map((l) => ({
@@ -546,11 +558,11 @@ export function CustomerPicker({ onPick, onClose }) {
   const shown = (s ? all.filter((c) => c.name.includes(s) || String(c.card || '') === s || (c.group || '').includes(s)) : all).sort((a, b) =>
     a.name.localeCompare(b.name, 'he')
   )
-  useBarcodeScanner((code) => {
+  useScanTarget((code) => {
     const c = all.find((x) => String(x.card) === String(code))
     if (c) onPick(c)
     else toast('כרטיס לא מוכר', 'err')
-  })
+  }, true, 1)
   return (
     <Modal title="בחירת בחור" onClose={onClose}>
       <input
