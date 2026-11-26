@@ -2,12 +2,78 @@
 // תתבוס — קליטת חשבונית / תעודת משלוח
 // מצלמים או מעלים → המערכת קוראת (Claude דרך שרת) → מסך אישור → מלאי מתעדכן
 // ============================================================
-import { useState } from 'react'
-import { DEMO, list, get, save, receiveStock, uid, round2 } from './db.js'
+import { useRef, useState } from 'react'
+import { DEMO, list, get, save, receiveStock, uid, round2, productCodes, sameCode, gtinValid, similarProducts, fixBarcode, audit } from './db.js'
+import { useScanTarget } from './scan.js'
 import { cloudConfigured, callAuthFn } from './sync.js'
 import { Modal, Field, money, toast, ProductThumb } from './ui.jsx'
 
 const MAX_PAGES = 6
+
+const findCode = (code) => list('product').find((p) => productCodes(p).some((c) => sameCode(c, code)))
+
+/** אזהרות ברקוד בשורת חשבונית: ברקוד לא תקני / דומה למוצר קיים */
+function BarcodeHint({ l, p, onPatch }) {
+  if (!l.barcode) return null
+  const valid = gtinValid(l.barcode)
+  const inProduct = p && productCodes(p).some((c) => sameCode(c, l.barcode))
+  if (inProduct) return null
+  const sims = similarProducts(l.barcode).filter((m) => m.p.id !== p?.id).slice(0, 3)
+  if (p) {
+    // שורה מותאמת למוצר שאין לו את הברקוד הזה
+    const pCode = productCodes(p).find((c) => similarProducts(l.barcode).some((m) => m.p.id === p.id && m.code === c))
+    return (
+      <div className="inv-bc">
+        {l.fixFrom ? (
+          <span>✓ הברקוד של "{p.name}" יתוקן מ-{l.fixFrom} ל-{l.barcode}</span>
+        ) : l.addCode ? (
+          <span>✓ {l.barcode} יתווסף כברקוד נוסף ל"{p.name}"</span>
+        ) : (
+          <>
+            <span>הברקוד {l.barcode} לא שמור במוצר "{p.name}"{!valid ? ' (ולא תקני)' : ''}</span>
+            {pCode && valid && !gtinValid(pCode) && (
+              <button className="btn small primary" onClick={() => onPatch({ fixFrom: pCode })}>
+                תקן את {pCode} ל-{l.barcode}
+              </button>
+            )}
+            {valid && (
+              <button className="btn small" onClick={() => onPatch({ addCode: true })}>
+                הוסף כברקוד נוסף
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    )
+  }
+  if (valid && !sims.length) return null
+  return (
+    <div className="inv-bc warn">
+      {!valid && !l.codeOk && <span>⚠ הברקוד {l.barcode} לא עומד בכללי ברקוד (אורך / ספרת ביקורת) — אולי חסרות ספרות?</span>}
+      {l.codeOk && <span>✓ יוכנס עם הקוד {l.barcode} למרות שלא תקני</span>}
+      {sims.map((m) => (
+        <button
+          key={m.p.id}
+          className="btn small primary"
+          title={'ברקוד במלאי: ' + m.code}
+          onClick={() => onPatch({ productId: m.p.id, codeOk: false, ...(valid && !gtinValid(m.code) ? { fixFrom: m.code } : valid ? { addCode: true } : {}) })}
+        >
+          האם התכוונת ל: {m.p.name} ({m.code})?
+        </button>
+      ))}
+      {!valid && !l.codeOk && (
+        <>
+          <button className="btn small" onClick={() => onPatch({ codeOk: true })}>
+            כן, הכנס עם הקוד הזה למרות שלא עומד בכללים
+          </button>
+          <button className="btn small" onClick={() => onPatch({ barcode: '' })}>
+            בלי ברקוד
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
 
 function fileToPayload(file) {
   return new Promise((res, rej) => {
@@ -136,8 +202,34 @@ function InvoiceReview({ doc, user, onClose, onBack }) {
       newCategory: '',
       confidence: l.confidence || 'medium',
       packSize: l.packSize || 1,
-    }))
+    })).map((l) => {
+      // ברקוד שכבר קיים במלאי → מתאימים אוטומטית למוצר
+      if (l.productId === '__new' && l.barcode) {
+        const ex = findCode(l.barcode)
+        if (ex) return { ...l, productId: ex.id }
+      }
+      return l
+    })
   )
+  const focusIdx = useRef(null)
+  // סריקה במסך האישור → שדה הברקוד של השורה שנבחרה
+  useScanTarget(
+    (code) => {
+      const i = focusIdx.current
+      if (i == null || !lines[i]) {
+        toast('לחץ קודם על שדה הברקוד של השורה', 'err')
+        return true
+      }
+      setBarcode(i, code)
+      return true
+    },
+    true,
+    1,
+  )
+  function setBarcode(i, code) {
+    const ex = code ? findCode(code) : null
+    setLines((ls) => ls.map((l, j) => (j === i ? { ...l, barcode: code, codeOk: false, fixFrom: null, ...(ex ? { productId: ex.id } : {}) } : l)))
+  }
   const openOrders = list('order').filter((o) => o.status === 'sent' && (!supplierId || o.supplierId === supplierId))
   const [orderId, setOrderId] = useState(openOrders.length === 1 ? openOrders[0].id : '')
   const [err, setErr] = useState('')
@@ -152,6 +244,9 @@ function InvoiceReview({ doc, user, onClose, onBack }) {
     for (const l of inc) {
       if (!(Number(l.qty) > 0)) return setErr(`כמות חסרה ב"${l.docName}"`)
       if (l.productId === '__new' && !l.docName.trim()) return setErr('חסר שם למוצר חדש')
+      if (l.productId === '__new' && l.barcode && !gtinValid(l.barcode) && !l.codeOk)
+        return setErr(`הברקוד ${l.barcode} ב"${l.docName}" לא עומד בכללי ברקוד — תקן אותו, בחר מוצר דומה, או לחץ "הכנס בכל זאת" / "בלי ברקוד"`)
+      if (l.productId === '__new' && l.barcode && findCode(l.barcode)) return setErr(`הברקוד ${l.barcode} כבר קיים במוצר "${findCode(l.barcode).name}"`)
     }
     let sid = supplierId
     if (!sid && newSupplier.trim()) sid = save('supplier', { name: newSupplier.trim() }).id
@@ -177,6 +272,14 @@ function InvoiceReview({ doc, user, onClose, onBack }) {
         })
         pid = p.id
       } else {
+        if (l.fixFrom && l.barcode) fixBarcode(pid, l.fixFrom, l.barcode, user.id)
+        else if (l.addCode && l.barcode) {
+          const pp = get('product', pid)
+          if (pp && !productCodes(pp).some((c) => sameCode(c, l.barcode))) {
+            save('product', { ...pp, barcodes: [...(pp.barcodes || []), l.barcode] })
+            audit('barcode_add', { productId: pid, productName: pp.name, code: l.barcode }, user.id)
+          }
+        }
         const p = get('product', pid)
         if (p && ((l.updateCost && cost != null && cost !== Number(p.cost)) || (!p.supplierId && sid) || (!p.barcode && l.barcode)))
           save('product', {
@@ -255,10 +358,19 @@ function InvoiceReview({ doc, user, onClose, onBack }) {
                 <small className="muted">במסמך:</small>
                 <b>{l.docName}</b>
                 {l.packSize > 1 && <small className="muted"> (מארז {l.packSize})</small>}
+                <input
+                  className="inv-bc-in"
+                  dir="ltr"
+                  placeholder="ברקוד"
+                  value={l.barcode}
+                  onFocus={() => (focusIdx.current = i)}
+                  onChange={(e) => setBarcode(i, e.target.value.trim())}
+                  disabled={!l.include}
+                />
               </div>
               <div className="inv-match">
                 <ProductThumb p={p || { emoji: '➕' }} size={30} />
-                <select value={l.productId} onChange={(e) => upd(i, { productId: e.target.value })} disabled={!l.include}>
+                <select value={l.productId} onChange={(e) => upd(i, { productId: e.target.value, fixFrom: null, addCode: false })} disabled={!l.include}>
                   <option value="__new">➕ מוצר חדש</option>
                   {products.map((pp) => (
                     <option key={pp.id} value={pp.id}>
@@ -286,6 +398,7 @@ function InvoiceReview({ doc, user, onClose, onBack }) {
                   עדכן עלות{p?.cost ? ` (היה ${money(p.cost)})` : ''}
                 </label>
               )}
+              {l.include && <BarcodeHint l={l} p={p} onPatch={(patch) => upd(i, patch)} />}
             </div>
           )
         })}

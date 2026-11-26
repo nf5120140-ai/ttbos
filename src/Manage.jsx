@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useScanTarget } from './scan.js'
+import { askSimilar } from './BarcodeMatch.jsx'
+import { DupTool, AuditLog } from './Dups.jsx'
 import Receive from './Receive.jsx'
 import { retryTempNames, approveName, lookupBarcode } from './lookup.js'
-import { list, get, save, remove, productCodes, sameCode, splitCodes, balanceOf, stockOf, topup, buildTopup, voidTopup, receiveStock, setStockTo, round2, getSetting } from './db.js'
+import { list, get, save, remove, productCodes, sameCode, splitCodes, similarProducts, similarPairs, gtinValid, audit, balanceOf, stockOf, topup, buildTopup, voidTopup, receiveStock, setStockTo, round2, getSetting } from './db.js'
 import { CreditModal, TerminalModal, creditStatus } from './Credit.jsx'
 import { InvoiceIntake } from './Invoice.jsx'
 import { PriceList } from './PriceList.jsx'
@@ -413,6 +416,9 @@ export function Inventory({ user }) {
   const [importing, setImporting] = useState(false)
   const [bulk, setBulk] = useState(false)
   const [scanMode, setScanMode] = useState(false)
+  const [dups, setDups] = useState(false)
+  const [log, setLog] = useState(false)
+  const searchRef = useRef(null)
   const [miss, setMiss] = useState(null) // מסנן "חסר מידע"
   const [sel, setSel] = useState(() => new Set())
   const [counts, setCounts] = useState({})
@@ -429,11 +435,28 @@ export function Inventory({ user }) {
   }, [products, v])
   const missDef = MISSING.find((m) => m.key === miss)
   const shown = products
-    .filter((p) => (filter === 'inactive' ? p.active === false : p.active !== false))
+    .filter((p) => (filter === 'all' || q ? true : filter === 'inactive' ? p.active === false : p.active !== false))
     .filter((p) => !missDef || missDef.test(p))
     .filter((p) => filter !== 'low' || stockOf(p.id) <= (Number(p.minStock) || 0))
     .filter((p) => !q || p.name.includes(q) || productCodes(p).some((c) => c.includes(q)) || (p.category || '').includes(q))
     .sort((a, b) => (a.category || '').localeCompare(b.category || '', 'he') || a.name.localeCompare(b.name, 'he'))
+  const dupCount = useMemo(() => similarPairs().length, [v])
+  // סריקה בעמוד המלאי → שדה החיפוש. לא נמצא → "האם התכוונת ל…" / מוצר חדש עם הברקוד
+  useScanTarget(
+    (code) => {
+      setQ(code)
+      setMiss(null)
+      searchRef.current?.focus()
+      if (list('product').some((p) => productCodes(p).some((c) => sameCode(c, code)))) return true
+      askSimilar(code, { userId: user.id, newLabel: '➕ צור מוצר חדש עם הברקוד' }).then((r) => {
+        if (r?.action === 'use') setQ(r.product.barcode || code)
+        else if (r?.action === 'new' || (!r && !similarProducts(code).length)) setEdit({ active: true, minStock: 5, parStock: 20, barcode: code })
+      })
+      return true
+    },
+    !edit && !scanMode && !invoice && !importing && !dups && !priceList && !promos && !bulk,
+    0,
+  )
   const lowCount = products.filter((p) => p.active !== false && stockOf(p.id) <= (Number(p.minStock) || 0)).length
   const stockValue = round2(products.filter((p) => p.active !== false).reduce((s, p) => s + Math.max(0, stockOf(p.id)) * (Number(p.cost) || 0), 0))
 
@@ -495,14 +518,26 @@ export function Inventory({ user }) {
           <button className="btn" onClick={() => setInvoice(true)}>
             🧾 קליטת חשבונית
           </button>
+          <button className={'btn' + (dupCount ? ' warn' : '')} onClick={() => setDups(true)}>
+            🔗 כפילויות ברקוד{dupCount ? ` (${dupCount})` : ''}
+          </button>
+          <button className="btn" onClick={() => setLog(true)}>
+            📜 יומן שינויים
+          </button>
           <button className="btn primary" onClick={() => setEdit({ active: true, minStock: 5, parStock: 20 })}>
             + מוצר
           </button>
         </div>
       </div>
       <div className="toolbar">
-        <input placeholder="🔍 שם / ברקוד / קטגוריה" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input ref={searchRef} placeholder="🔍 שם / ברקוד / קטגוריה" value={q} onChange={(e) => setQ(e.target.value)} />
+        {q && (
+          <button className="btn small" onClick={() => setQ('')}>
+            ✕
+          </button>
+        )}
         <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+          <option value="all">הכל (ללא סינון)</option>
           <option value="active">פעילים</option>
           <option value="low">מלאי נמוך</option>
           <option value="inactive">לא פעילים</option>
@@ -630,6 +665,8 @@ export function Inventory({ user }) {
         {!shown.length && <Empty>אין מוצרים</Empty>}
       </div>
       {edit && <ProductEditor p={edit} user={user} onClose={() => setEdit(null)} />}
+      {dups && <DupTool user={user} onClose={() => setDups(false)} />}
+      {log && <AuditLog onClose={() => setLog(false)} />}
       {recv && <ReceiveModal p={recv} user={user} onClose={() => setRecv(null)} />}
       {invoice && <InvoiceIntake user={user} onClose={() => setInvoice(false)} />}
       {priceList && <PriceList onClose={() => setPriceList(false)} />}
@@ -651,7 +688,30 @@ function ProductEditor({ p, user, onClose }) {
   const [f, setF] = useState({ ...p, barcodes: Array.isArray(p.barcodes) ? p.barcodes : [] })
   const [extra, setExtra] = useState('')
   const [initStock, setInitStock] = useState('')
+  const curStock = p.id ? stockOf(p.id) : 0
+  const [stockNow, setStockNow] = useState(p.id ? String(curStock) : '')
   const [cam, setCam] = useState(false)
+  const barcodeRef = useRef(null)
+  // סריקה בזמן עריכת מוצר → שדה הברקוד (ריק = ראשי, אחרת ברקוד נוסף)
+  useScanTarget(
+    (code) => {
+      const other = list('product').find((x) => x.id !== p.id && productCodes(x).some((y) => sameCode(y, code)))
+      if (other) {
+        toast(`ברקוד ${code} כבר קיים במוצר "${other.name}"`, 'err')
+        return true
+      }
+      setF((pp) => {
+        if (productCodes(pp).some((y) => sameCode(y, code))) return pp
+        if (!pp.barcode) return { ...pp, barcode: code }
+        toast('➕ נוסף כברקוד נוסף: ' + code)
+        return { ...pp, barcodes: [...(pp.barcodes || []), code] }
+      })
+      barcodeRef.current?.focus()
+      return true
+    },
+    !cam,
+    1,
+  )
   const set = (k) => (e) => setF({ ...f, [k]: e?.target ? e.target.value : e })
   const cats = [...new Set(list('product').map((x) => x.category).filter(Boolean))]
   const moves = p.id
@@ -682,7 +742,7 @@ function ProductEditor({ p, user, onClose }) {
     })
     setExtra('')
   }
-  function ok() {
+  async function ok() {
     if (!f.name?.trim()) return toast('חסר שם', 'err')
     if (!(Number(f.price) >= 0) || f.price === '' || f.price == null) return toast('חסר מחיר', 'err')
     const mine = productCodes(f)
@@ -691,6 +751,24 @@ function ProductEditor({ p, user, onClose }) {
       if (other) return toast(`ברקוד ${c} כבר קיים במוצר "${other.name}"`, 'err')
     }
     if (mine.some((c, i) => mine.findIndex((y) => sameCode(y, c)) !== i)) return toast('אותו ברקוד מופיע פעמיים', 'err')
+    // ברקודים חדשים: דומה למוצר קיים? לא תקני?
+    const before = p.id ? productCodes(p) : []
+    for (const c of mine.filter((c) => !before.some((y) => sameCode(y, c)))) {
+      const sim = similarProducts(c, p.id)
+      if (sim.length) {
+        const go = await confirmDlg(
+          `ברקוד המוצר דומה למוצר שכבר קיים:\n${sim.map((m) => `• ${m.p.name} — ${m.code}`).join('\n')}\nאם זה אותו מוצר — בטל, ואחר כך מזג אותם ב"🔗 כפילויות ברקוד".\n\nלשמור בכל זאת כמוצר נפרד?`,
+          'כן, מוצר נפרד',
+          'ביטול',
+          'primary',
+        )
+        if (!go) return
+      }
+      if (!gtinValid(c)) {
+        const go = await confirmDlg(`הברקוד ${c} לא עומד בכללי ברקוד תקני (אורך / ספרת ביקורת).\nאולי חסרות ספרות בהתחלה?\n\nלהכניס את המוצר עם הקוד הזה למרות שלא עומד בכללים?`, 'כן, הכנס בכל זאת', 'ביטול', 'primary')
+        if (!go) return
+      }
+    }
     const rec = save('product', {
       ...f,
       name: f.name.trim(),
@@ -705,12 +783,17 @@ function ProductEditor({ p, user, onClose }) {
       ...(f.img && f.imgStatus === 'web' ? { imgStatus: 'ok' } : {}),
     })
     if (!p.id && Number(initStock)) receiveStock(rec.id, Number(initStock), user.id, 'receive')
+    if (p.id && stockNow !== '' && Number(stockNow) !== curStock) {
+      setStockTo(p.id, Number(stockNow), user.id)
+      audit('stock', { productId: p.id, productName: rec.name, from: curStock, to: Number(stockNow) }, user.id)
+    }
     toast('נשמר')
     onClose()
   }
   async function del() {
     if (!(await confirmDlg('למחוק את ' + p.name + ' מהמלאי?\nכל המכירות שלו נשארות בדוחות, עם המחירים שבהם נמכר.\n(אפשר גם רק לסמן "לא פעיל" — כך אפשר להחזיר אותו בעתיד)', 'מחק'))) return
     remove('product', p.id)
+    audit('delete', { productId: p.id, productName: p.name, codes: productCodes(p) }, user.id)
     onClose()
   }
   const margin = Number(f.price) && Number(f.cost) ? Math.round(((f.price - f.cost) / f.price) * 100) : null
@@ -776,7 +859,7 @@ function ProductEditor({ p, user, onClose }) {
         </Field>
         <Field label="ברקוד">
           <div className="row gap-s">
-            <input value={f.barcode || ''} onChange={set('barcode')} placeholder="סרוק או הקלד" />
+            <input ref={barcodeRef} value={f.barcode || ''} onChange={set('barcode')} placeholder="סרוק או הקלד" />
             {cameraScanSupported && (
               <button className="btn" onClick={() => setCam(true)}>
                 📷
@@ -836,9 +919,13 @@ function ProductEditor({ p, user, onClose }) {
             ))}
           </select>
         </Field>
-        {!p.id && (
+        {!p.id ? (
           <Field label="מלאי התחלתי">
             <input type="number" value={initStock} onChange={(e) => setInitStock(e.target.value)} />
+          </Field>
+        ) : (
+          <Field label="מלאי עכשיו" hint={Number(stockNow) !== curStock && stockNow !== '' ? `יעודכן מ-${curStock} ל-${stockNow}` : 'אפשר לתקן כאן ישירות'}>
+            <input type="number" value={stockNow} onChange={(e) => setStockNow(e.target.value)} />
           </Field>
         )}
       </div>
@@ -1388,6 +1475,13 @@ function BulkAssign({ ids, onDone }) {
       </datalist>
       <button className="btn small" disabled={!cat.trim()} onClick={() => apply(() => ({ category: cat.trim() }), 'הקטגוריה עודכנה')}>
         קבע קטגוריה
+      </button>
+      <span className="sep" />
+      <button className="btn small green" onClick={() => apply(() => ({ active: true }), 'הופעלו')}>
+        ✓ הפוך לפעיל
+      </button>
+      <button className="btn small" onClick={() => apply(() => ({ active: false }), 'הופסקו (לא פעיל)')}>
+        ⏸ הפוך ללא פעיל
       </button>
       <span className="sep" />
       <button className="btn small" onClick={() => apply(() => ({ showInPos: true }), 'מוצג בכפתורי הקופה')}>

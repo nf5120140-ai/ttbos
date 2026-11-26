@@ -10,6 +10,9 @@ import { useVersion, useSyncStatus, can, toast, confirmDlg, ToastHost, ConfirmHo
 import Pos from './Pos.jsx'
 import CustomerDisplay from './CustomerDisplay.jsx'
 import { IS_DISPLAY, regId } from './display.js'
+import { installGlobalScanner } from './scan.js'
+import { SimilarHost } from './BarcodeMatch.jsx'
+installGlobalScanner()
 import { listMembers, addMember, removeMember } from './members.js'
 import { vfdCfg, setVfdCfg, vfdPick, vfdTest, vfdSupported } from './vfd.js'
 import { drawerCfg, setDrawerCfg, drawerPick, openDrawer, drawerSupported, scanDrawer } from './drawer.js'
@@ -159,6 +162,7 @@ function KioskApp() {
       </main>
       <ToastHost />
       <ConfirmHost />
+      <SimilarHost />
     </div>
   )
 }
@@ -1445,6 +1449,7 @@ function SuperConsole({ sync }) {
       </main>
       <ToastHost />
       <ConfirmHost />
+      <SimilarHost />
     </div>
   )
 }
