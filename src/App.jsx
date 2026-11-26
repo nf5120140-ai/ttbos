@@ -1473,6 +1473,35 @@ function StoresAdmin() {
   const [open, setOpen] = useState(null) // store id → רשימת מיילים
   const [mails, setMails] = useState([])
   const [q, setQ] = useState('')
+  // סריקות חשבוניות לפי חודש — לחיוב הלקוחות
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [usage, setUsage] = useState(null) // Map store_id → stats | 'missing'
+  const [rates, setRates] = useState(() => {
+    try {
+      return { in: 3, out: 15, usd: 3.7, ...JSON.parse(localStorage.getItem('tt_scan_rates') || '{}') }
+    } catch {
+      return { in: 3, out: 15, usd: 3.7 }
+    }
+  })
+  const setRate = (k, v) => {
+    const n = { ...rates, [k]: v }
+    setRates(n)
+    try {
+      localStorage.setItem('tt_scan_rates', JSON.stringify(n))
+    } catch {}
+  }
+  const loadUsage = async (m = month) => {
+    const [y, mm] = m.split('-').map(Number)
+    const from = new Date(y, mm - 1, 1).toISOString()
+    const to = new Date(y, mm, 1).toISOString()
+    const { data, error } = await sb.rpc('tt_admin_scan_stats', { p_from: from, p_to: to })
+    if (error) return setUsage(/tt_admin_scan_stats|Could not find/i.test(error.message) ? 'missing' : null)
+    setUsage(new Map((data || []).map((x) => [x.store_id, x])))
+  }
+  useEffect(() => {
+    loadUsage(month)
+  }, [month])
+  const costUsd = (u) => (u ? (Number(u.input_tokens) * rates.in + Number(u.output_tokens) * rates.out) / 1e6 : 0)
   const load = async () => {
     const { data, error } = await sb.rpc('tt_admin_stores')
     if (error) return setErr(/tt_admin_stores|Could not find/i.test(error.message) ? 'צריך להריץ את multi-store.sql ב-Supabase' : error.message)
@@ -1516,6 +1545,22 @@ function StoresAdmin() {
       </h3>
       {err && <p className="err small">{err}</p>}
       {!rows && !err && <p className="muted small">טוען…</p>}
+      <div className="scan-usage">
+        <b>🧾 סריקות חשבוניות בחודש</b>
+        <input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} />
+        <span className="muted small">
+          מחיר Claude ל-מיליון טוקנים: קלט $
+          <input className="rate" inputMode="decimal" value={rates.in} onChange={(e) => setRate('in', Number(e.target.value) || 0)} /> פלט $
+          <input className="rate" inputMode="decimal" value={rates.out} onChange={(e) => setRate('out', Number(e.target.value) || 0)} /> · דולר = ₪
+          <input className="rate" inputMode="decimal" value={rates.usd} onChange={(e) => setRate('usd', Number(e.target.value) || 0)} />
+        </span>
+        {usage === 'missing' && <span className="err small">צריך להריץ את scan-usage.sql ב-Supabase</span>}
+        {usage instanceof Map && (
+          <span className="small">
+            סה״כ: {[...usage.values()].reduce((a, u) => a + Number(u.scans), 0)} סריקות · ${[...usage.values()].reduce((a, u) => a + costUsd(u), 0).toFixed(2)}
+          </span>
+        )}
+      </div>
       {rows && rows.length > 5 && <input placeholder="🔍 חיפוש חנות / מייל / טלפון" value={q} onChange={(e) => setQ(e.target.value)} />}
       {shown.map((r) => (
         <div key={r.id} className={'store-row ' + r.status}>
@@ -1529,6 +1574,18 @@ function StoresAdmin() {
             <div className="muted small">
               {r.members} מיילים · {r.records} רשומות{r.last_activity ? ' · פעילות אחרונה ' + fmtDT(r.last_activity) : ''}
             </div>
+            {usage instanceof Map &&
+              (() => {
+                const u = usage.get(r.id)
+                if (!u) return <div className="small">🧾 0 סריקות בחודש</div>
+                const usd = costUsd(u)
+                return (
+                  <div className="small scan-line">
+                    🧾 <b>{u.scans}</b> סריקות ({u.pages} עמודים{Number(u.scans) - Number(u.ok_scans) ? `, ${Number(u.scans) - Number(u.ok_scans)} נכשלו` : ''}) · עלות משוערת <b>${usd.toFixed(2)}</b> ≈ ₪{(usd * rates.usd).toFixed(2)}
+                    {u.scans > 0 && ` · ממוצע ₪${((usd * rates.usd) / Number(u.scans)).toFixed(2)} לסריקה`}
+                  </div>
+                )
+              })()}
           </div>
           <div className="row gap-s wrap">
             {r.status === 'pending' && (

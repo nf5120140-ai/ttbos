@@ -52,7 +52,19 @@ ${slist || '(אין ספקים)'}`
 }
 
 // כמה חנויות: הסריקה עולה כסף — מותרת רק לחנות שמנהל-העל הפעיל לה (features.invoice_scan)
-async function scanAllowed(req: Request) {
+// רישום כל סריקה (לחיוב לפי חנות) — לא מכשיל את הסריקה אם הרישום נכשל
+async function logScan(st: any, rec: Record<string, unknown>) {
+  const base = (Deno.env.get('SUPABASE_URL') || '').replace(/\/$/, '')
+  const svc = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+  if (!base || !svc || !st?.store_id) return
+  await fetch(`${base}/rest/v1/tt_scan_log`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${svc}`, apikey: svc, 'content-type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ store_id: st.store_id, user_id: st.user_id || null, ...rec }),
+  }).catch(() => {})
+}
+
+async function myStatus(req: Request) {
   const base = (Deno.env.get('SUPABASE_URL') || '').replace(/\/$/, '')
   const anon = Deno.env.get('SUPABASE_ANON_KEY') || ''
   try {
@@ -61,12 +73,11 @@ async function scanAllowed(req: Request) {
       headers: { Authorization: req.headers.get('authorization') || '', apikey: anon, 'content-type': 'application/json' },
       body: '{}',
     })
-    if (r.status === 404) return true // מבנה ישן — חנות אחת
-    if (!r.ok) return false
-    const st = await r.json()
-    return st?.status === 'active' && st?.features?.invoice_scan === true
+    if (r.status === 404) return { legacy: true }
+    if (!r.ok) return null
+    return await r.json()
   } catch {
-    return false
+    return null
   }
 }
 
@@ -75,7 +86,9 @@ Deno.serve(async (req) => {
   try {
     const key = Deno.env.get('ANTHROPIC_API_KEY')
     if (!key) return json({ error: 'חסר ANTHROPIC_API_KEY בסודות של Supabase' }, 500)
-    if (!(await scanAllowed(req))) return json({ error: 'סריקת חשבוניות לא פעילה בחנות הזו — פנה למנהל המערכת' }, 403)
+    const st = await myStatus(req)
+    if (!st || (!st.legacy && !(st.status === 'active' && st.features?.invoice_scan === true)))
+      return json({ error: 'סריקת חשבוניות לא פעילה בחנות הזו — פנה למנהל המערכת' }, 403)
     const body = await req.json()
     const { products = [], suppliers = [] } = body
     // files: [{data, mediaType}] — כמה עמודים / תמונות של אותו מסמך
@@ -99,6 +112,8 @@ Deno.serve(async (req) => {
       }),
     })
     const out = await r.json()
+    const usage = { pages: files.length, input_tokens: out?.usage?.input_tokens || 0, output_tokens: out?.usage?.output_tokens || 0, model: out?.model || '' }
+    await logScan(st, { ...usage, ok: r.ok, error: r.ok ? null : String(out?.error?.message || r.status).slice(0, 200) })
     if (!r.ok) return json({ error: 'שגיאה בקריאת המסמך: ' + (out?.error?.message || r.status) }, 502)
     const text: string = (out.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
     const start = text.indexOf('{')
