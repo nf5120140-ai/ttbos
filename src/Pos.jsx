@@ -105,7 +105,7 @@ export default function Pos({ user }) {
   const customer = customerId ? get('customer', customerId) : null
   const staff = !!staffAuth
 
-  const categories = useMemo(() => [...new Set(products.map((p) => p.category || 'כללי'))].sort(), [products])
+  const categories = useMemo(() => [...new Set(products.filter((p) => p.showInPos !== false).map((p) => p.category || 'כללי'))].sort(), [products])
 
   // מוצרים נפוצים — לפי 30 הימים האחרונים
   const topIds = useMemo(() => {
@@ -119,14 +119,15 @@ export default function Pos({ user }) {
   }, [v])
 
   const shown = useMemo(() => {
-    let arr = products
+    let arr = products.filter((p) => p.showInPos !== false) // כפתורים — רק מוצרים שנבחרו; סריקה וחיפוש מוצאים הכול
     if (q.trim()) {
+      arr = products
       const s = q.trim().toLowerCase()
       arr = arr.filter((p) => p.name.toLowerCase().includes(s) || productCodes(p).some((c) => c.includes(s)))
     } else if (cat === '__top') {
       const byId = new Map(products.map((p) => [p.id, p]))
-      const tops = topIds.map((id) => byId.get(id)).filter(Boolean)
-      arr = tops.length ? tops : products
+      const tops = topIds.map((id) => byId.get(id)).filter((p) => p && p.showInPos !== false)
+      arr = tops.length ? tops : arr
     } else if (cat !== '__all') arr = arr.filter((p) => (p.category || 'כללי') === cat)
     return cat === '__top' && !q ? arr : [...arr].sort((a, b) => a.name.localeCompare(b.name, 'he'))
   }, [products, cat, q, topIds])

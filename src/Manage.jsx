@@ -510,7 +510,7 @@ export function Inventory({ user }) {
       </div>
       <div className="miss-chips">
         {MISSING.filter((m) => missCounts[m.key] > 0).map((m) => (
-          <button key={m.key} className={'miss-chip' + (miss === m.key ? ' on' : '') + (m.warn ? ' warn' : '')} onClick={() => (setMiss(miss === m.key ? null : m.key), setSel(new Set()))}>
+          <button key={m.key} className={'miss-chip' + (miss === m.key ? ' on' : '') + (m.warn ? ' warn' : '') + (m.view ? ' view' : '')} onClick={() => (setMiss(miss === m.key ? null : m.key), setSel(new Set()))}>
             {missCounts[m.key]} {m.label}
           </button>
         ))}
@@ -583,6 +583,8 @@ export function Inventory({ user }) {
                       </span>
                     )}
                     {p.nameStatus === 'temp' && <span className="tag temp">חסר שם</span>}
+                    {p.showInPos === false && <span className="tag">🙈 בלי כפתור</span>}
+                    {p.priceGroup && <span className="tag">📋 {p.priceGroup}</span>}
                     {p.barcode && (
                       <div className="muted small">
                         {p.barcode}
@@ -698,6 +700,7 @@ function ProductEditor({ p, user, onClose }) {
       minStock: Number(f.minStock) || 0,
       parStock: Number(f.parStock) || 0,
       category: (f.category || 'כללי').trim(),
+      priceGroup: String(f.priceGroup || '').trim(),
       nameStatus: 'ok', // נשמר בעריכה = נבדק ואושר
       ...(f.img && f.imgStatus === 'web' ? { imgStatus: 'ok' } : {}),
     })
@@ -839,7 +842,19 @@ function ProductEditor({ p, user, onClose }) {
           </Field>
         )}
       </div>
-      <Toggle checked={f.active !== false} onChange={(x) => setF({ ...f, active: x })} label="פעיל (מוצג בקופה)" />
+      <Toggle checked={f.active !== false} onChange={(x) => setF({ ...f, active: x })} label="פעיל (אפשר למכור)" />
+      <Toggle checked={f.showInPos !== false} onChange={(x) => setF({ ...f, showInPos: x })} label="כפתור במסך הקופה (כבוי = רק בסריקה / חיפוש)" />
+      <Toggle checked={f.inPriceList !== false} onChange={(x) => setF({ ...f, inPriceList: x })} label="מופיע במחירון" />
+      {f.inPriceList !== false && (
+        <Field label="שם במחירון — לאיחוד סוגים (למשל כל הסוגים של דוריטוס: 'דוריטוס')">
+          <input list="price-groups" value={f.priceGroup || ''} placeholder="ריק = שם המוצר" onChange={set('priceGroup')} />
+          <datalist id="price-groups">
+            {[...new Set(list('product').map((x) => x.priceGroup).filter(Boolean))].map((g) => (
+              <option key={g} value={g} />
+            ))}
+          </datalist>
+        </Field>
+      )}
       {moves.length > 0 && (
         <details className="moves">
           <summary>תנועות מלאי אחרונות (מלאי נוכחי: {stockOf(p.id)})</summary>
@@ -1306,6 +1321,8 @@ const MISSING = [
   { key: 'barcode', label: 'ללא ברקוד', test: (p) => !productCodes(p).length },
   { key: 'img', label: 'ללא תמונה', test: (p) => !p.img },
   { key: 'minStock', label: 'בלי מלאי מינימום', test: (p) => num(p.minStock) <= 0 },
+  { key: 'hiddenPos', label: 'בלי כפתור בקופה', test: (p) => p.showInPos === false, view: true },
+  { key: 'noPriceList', label: 'לא במחירון', test: (p) => p.inPriceList === false, view: true },
   { key: 'negative', label: 'מלאי שלילי', test: (p) => stockOf(p.id) < 0, warn: true },
   { key: 'belowMin', label: 'מתחת למינימום', test: (p) => num(p.minStock) > 0 && stockOf(p.id) < num(p.minStock), warn: true },
 ]
@@ -1340,6 +1357,7 @@ function BulkAssign({ ids, onDone }) {
   const cats = [...new Set(list('product').map((p) => p.category).filter((c) => c && c !== 'כללי'))].sort((a, b) => a.localeCompare(b, 'he'))
   const [sup, setSup] = useState('')
   const [cat, setCat] = useState('')
+  const [grp, setGrp] = useState('')
   const apply = (patch, msg) => {
     for (const id of ids) {
       const p = get('product', id)
@@ -1371,6 +1389,24 @@ function BulkAssign({ ids, onDone }) {
       <button className="btn small" disabled={!cat.trim()} onClick={() => apply(() => ({ category: cat.trim() }), 'הקטגוריה עודכנה')}>
         קבע קטגוריה
       </button>
+      <span className="sep" />
+      <button className="btn small" onClick={() => apply(() => ({ showInPos: true }), 'מוצג בכפתורי הקופה')}>
+        👁 הצג בקופה
+      </button>
+      <button className="btn small" onClick={() => apply(() => ({ showInPos: false }), 'הוסתר מכפתורי הקופה')}>
+        🙈 הסתר מכפתורי הקופה
+      </button>
+      <button className="btn small" onClick={() => apply(() => ({ inPriceList: true }), 'נוסף למחירון')}>
+        📋 במחירון
+      </button>
+      <button className="btn small" onClick={() => apply(() => ({ inPriceList: false }), 'הוצא מהמחירון')}>
+        לא במחירון
+      </button>
+      <input placeholder="שם במחירון…" value={grp} onChange={(e) => setGrp(e.target.value)} style={{ width: 130 }} />
+      <button className="btn small" disabled={!grp.trim()} onClick={() => apply(() => ({ priceGroup: grp.trim(), inPriceList: true }), `אוחד במחירון כ"${grp.trim()}"`)}>
+        אחד במחירון
+      </button>
+      <span className="sep" />
       <button className="btn small" onClick={() => apply((p) => ({ nameStatus: p.nameStatus === 'temp' ? 'temp' : 'ok', ...(p.imgStatus === 'web' ? { imgStatus: 'ok' } : {}) }), 'השמות אושרו')}>
         ✓ אשר שמות
       </button>
