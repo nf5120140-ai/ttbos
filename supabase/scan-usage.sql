@@ -19,8 +19,9 @@ create table if not exists public.tt_scan_log (
 create index if not exists tt_scan_log_store_at on public.tt_scan_log (store_id, created_at);
 alter table public.tt_scan_log enable row level security; -- רק הפונקציה (service role) כותבת; קריאה דרך הפונקציה למטה
 
-create or replace function public.tt_admin_scan_stats(p_from timestamptz, p_to timestamptz)
-returns table (store_id uuid, scans bigint, ok_scans bigint, pages bigint, input_tokens bigint, output_tokens bigint, last_at timestamptz)
+drop function if exists public.tt_admin_scan_stats(timestamptz, timestamptz);
+create function public.tt_admin_scan_stats(p_from timestamptz, p_to timestamptz)
+returns table (store_id uuid, scans bigint, ok_scans bigint, pages bigint, input_tokens bigint, output_tokens bigint, last_at timestamptz, backfill bigint)
 language plpgsql stable security definer set search_path = public
 as $$
 begin
@@ -29,7 +30,8 @@ begin
   end if;
   return query
     select l.store_id, count(*), count(*) filter (where l.ok), coalesce(sum(l.pages), 0),
-           coalesce(sum(l.input_tokens), 0), coalesce(sum(l.output_tokens), 0), max(l.created_at)
+           coalesce(sum(l.input_tokens), 0), coalesce(sum(l.output_tokens), 0), max(l.created_at),
+           count(*) filter (where l.model = 'backfill')
     from public.tt_scan_log l
     where l.created_at >= p_from and l.created_at < p_to
     group by l.store_id;

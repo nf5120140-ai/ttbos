@@ -1502,6 +1502,17 @@ function StoresAdmin() {
     loadUsage(month)
   }, [month])
   const costUsd = (u) => (u ? (Number(u.input_tokens) * rates.in + Number(u.output_tokens) * rates.out) / 1e6 : 0)
+  // ממוצע לסריקה שנמדדה (בכל החנויות בחודש) — להערכת סריקות ישנות
+  const avgUsd = (() => {
+    if (!(usage instanceof Map)) return 0
+    let c = 0
+    let n = 0
+    for (const u of usage.values()) {
+      c += costUsd(u)
+      n += Number(u.scans) - Number(u.backfill || 0)
+    }
+    return n ? c / n : 0
+  })()
   const load = async () => {
     const { data, error } = await sb.rpc('tt_admin_stores')
     if (error) return setErr(/tt_admin_stores|Could not find/i.test(error.message) ? 'צריך להריץ את multi-store.sql ב-Supabase' : error.message)
@@ -1557,7 +1568,7 @@ function StoresAdmin() {
         {usage === 'missing' && <span className="err small">צריך להריץ את scan-usage.sql ב-Supabase</span>}
         {usage instanceof Map && (
           <span className="small">
-            סה״כ: {[...usage.values()].reduce((a, u) => a + Number(u.scans), 0)} סריקות · ${[...usage.values()].reduce((a, u) => a + costUsd(u), 0).toFixed(2)}
+            סה״כ: {[...usage.values()].reduce((a, u) => a + Number(u.scans), 0)} סריקות · ${[...usage.values()].reduce((a, u) => a + costUsd(u) + Number(u.backfill || 0) * avgUsd, 0).toFixed(2)}
           </span>
         )}
       </div>
@@ -1578,11 +1589,14 @@ function StoresAdmin() {
               (() => {
                 const u = usage.get(r.id)
                 if (!u) return <div className="small">🧾 0 סריקות בחודש</div>
-                const usd = costUsd(u)
+                const old = Number(u.backfill || 0) // סריקות מלפני המעקב — בלי נתוני עלות
+                const tracked = Number(u.scans) - old
+                const usd = costUsd(u) + old * avgUsd // לסריקות הישנות: לפי הממוצע של הסריקות שנמדדו
                 return (
                   <div className="small scan-line">
                     🧾 <b>{u.scans}</b> סריקות ({u.pages} עמודים{Number(u.scans) - Number(u.ok_scans) ? `, ${Number(u.scans) - Number(u.ok_scans)} נכשלו` : ''}) · עלות משוערת <b>${usd.toFixed(2)}</b> ≈ ₪{(usd * rates.usd).toFixed(2)}
-                    {u.scans > 0 && ` · ממוצע ₪${((usd * rates.usd) / Number(u.scans)).toFixed(2)} לסריקה`}
+                    {tracked > 0 && ` · ממוצע ₪${((costUsd(u) * rates.usd) / tracked).toFixed(2)} לסריקה`}
+                    {old > 0 && <span className="muted"> · מתוכן {old} מלפני המעקב{avgUsd ? ' (עלות לפי ממוצע)' : ' (בלי נתוני עלות)'}</span>}
                   </div>
                 )
               })()}
