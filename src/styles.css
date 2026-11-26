@@ -1977,3 +1977,7 @@ table.inv tr.sel td { background: #f3f7ff; }
 .scan-usage input[type='month'] { width: auto; }
 .scan-usage input.rate { width: 52px; padding: 2px 4px; margin: 0 2px; }
 .scan-line { color: #1f3f7a; }
+.pl-vars { color: #667; font-weight: normal; }
+tr.dim td { opacity: .5; }
+.miss-chip.view { border-style: dashed; }
+.bulk-bar .sep { width: 1px; align-self: stretch; background: #e3d39b; margin: 0 4px; }
