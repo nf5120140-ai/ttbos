@@ -517,13 +517,17 @@ function Settings({ user, sync }) {
       <div className="two-col">
         <div className="card">
           <h3>המכשיר הזה</h3>
-          <Field label="שם המכשיר (מופיע בדוחות ובספירת קופה)">
-            <div className="row gap-s">
-              <input value={dn} onChange={(e) => setDn(e.target.value)} />
-              <button className="btn" onClick={() => (setDeviceName(dn.trim() || 'קופה'), toast('נשמר'))}>
-                שמור
-              </button>
-            </div>
+          <Field label="שם המכשיר (מופיע בדוחות ובספירת קופה)" hint={isMgr ? '' : 'רק מנהל יכול לשנות את שם המכשיר'}>
+            {isMgr ? (
+              <div className="row gap-s">
+                <input value={dn} onChange={(e) => setDn(e.target.value)} />
+                <button className="btn" onClick={() => (setDeviceName(dn.trim() || 'קופה'), toast('נשמר'))}>
+                  שמור
+                </button>
+              </div>
+            ) : (
+              <input value={deviceName()} readOnly disabled />
+            )}
           </Field>
           <Field label="שינוי הקוד האישי שלי">
             <div className="row gap-s">
